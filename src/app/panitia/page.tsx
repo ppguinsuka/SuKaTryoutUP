@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api, post } from '@/lib/client';
+import { AdminShell } from '@/components/admin-shell';
 
 type Tab = 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
 type Bidang = { kode: string; nama: string };
@@ -54,40 +55,40 @@ export default function PanitiaPage() {
     window.location.href = '/login';
   }
 
+  function pilihTab(id: Tab) {
+    setTab(id);
+    setError(null);
+    setInfo(null);
+  }
+
+  const judulTab = TABS.find((t) => t.id === tab)?.label ?? '';
+
   return (
-    <>
-      <div className="topbar">
-        <div className="brand">
-          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" />
-          <div>
-            SuKaTryoutUP
-            <div className="sub">Panel Panitia</div>
-          </div>
+    <AdminShell
+      title="SuKaTryoutUP"
+      subtitle="Panel Panitia"
+      nav={TABS}
+      active={tab}
+      onSelect={pilihTab}
+      onLogout={logout}
+    >
+      <div className="page-header">
+        <div>
+          <h1>{judulTab}</h1>
         </div>
-        <button className="btn outline" onClick={logout}>Log Out</button>
       </div>
 
-      <div className="container">
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-          {TABS.map((t) => (
-            <button key={t.id} className={`btn ${tab === t.id ? '' : 'outline'}`} onClick={() => { setTab(t.id); setError(null); setInfo(null); }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {error && <div className="notice danger">{error}</div>}
+      {info && <div className="notice neutral">{info}</div>}
 
-        {error && <div className="error">{error}</div>}
-        {info && <div className="info" style={{ marginBottom: 10 }}>{info}</div>}
-
-        {!rujukan && !error && <div>Memuat…</div>}
-        {rujukan && tab === 'ujian' && <UjianTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
-        {rujukan && tab === 'soal' && <SoalTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
-        {rujukan && tab === 'peserta' && <PesertaTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
-        {rujukan && tab === 'pengawas' && <PengawasTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
-        {rujukan && tab === 'ruang' && <RuangTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
-        {rujukan && tab === 'nilai' && <NilaiTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
-      </div>
-    </>
+      {!rujukan && !error && <div>Memuat…</div>}
+      {rujukan && tab === 'ujian' && <UjianTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
+      {rujukan && tab === 'soal' && <SoalTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
+      {rujukan && tab === 'peserta' && <PesertaTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
+      {rujukan && tab === 'pengawas' && <PengawasTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
+      {rujukan && tab === 'ruang' && <RuangTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
+      {rujukan && tab === 'nilai' && <NilaiTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
+    </AdminShell>
   );
 }
 

@@ -59,16 +59,27 @@ export default function PesertaDashboard() {
         <button className="btn outline" onClick={logout}>Log Out</button>
       </div>
 
+      <div className="page-bar">
+        <h2>DAFTAR SESI UJIAN</h2>
+        <button className="btn outline" onClick={logout}>Log Out</button>
+      </div>
+
       <div className="container">
-        <div className="info" style={{ marginBottom: 14 }}>
-          Anda hanya boleh mengerjakan satu ujian dalam waktu yang sama. Ujian dibuka sesuai jadwal yang ditetapkan Panitia.
-          Ujian hanya dapat dibuka melalui <b>Safe Exam Browser (SEB)</b> di laptop.
+        <div className="info-box">
+          <strong>Informasi</strong>
+          <p>
+            Berikut ini ditampilkan daftar sesi ujian untuk Anda. Perhatikan bahwa Anda <b>hanya boleh mengerjakan satu sesi ujian dalam waktu yang sama</b>.
+            Ujian hanya dapat dibuka melalui <b>Safe Exam Browser (SEB)</b> di laptop.
+          </p>
         </div>
 
         {error && <div className="error">{error}</div>}
         {!ujian && !error && <div>Memuat…</div>}
         {ujian && ujian.length === 0 && (
-          <div className="card info">Belum ada sesi ujian untuk Anda. Silakan cek kembali nanti atau hubungi Panitia.</div>
+          <div className="info-box kosong">
+            <strong>Perhatian!</strong>
+            <p>Tidak ada sesi ujian yang dapat ditampilkan di sini. Silakan cek kembali dalam beberapa waktu ke depan, atau hubungi Panitia ujian Anda.</p>
+          </div>
         )}
 
         {hasil.length > 0 && (
@@ -95,42 +106,39 @@ export default function PesertaDashboard() {
           </div>
         )}
 
-        {ujian?.map((u) => (
-          <div className="card" key={u.id}>
-            <h3>{u.judul}</h3>
-            <div style={{ fontSize: 13, color: '#555', marginBottom: 10 }}>Kode: {u.kode}</div>
-            <table className="tabel" style={{ marginBottom: 10 }}>
-              <thead>
-                <tr>
-                  <th>Bagian</th>
-                  <th>Mulai</th>
-                  <th>Batas</th>
-                  <th>Durasi</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {u.bagian.map((b) => (
-                  <tr key={b.tipe}>
-                    <td>{LABEL[b.tipe]}</td>
-                    <td>{fmtWaktu(b.mulai)}</td>
-                    <td>{fmtWaktu(b.selesai)}</td>
-                    <td>{b.durasiMenit} menit</td>
-                    <td>{b.status.replace(/_/g, ' ').toLowerCase()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="sesi-grid">
+          {ujian?.map((u) => (
+            <div className="sesi-card" key={u.id}>
+              <div className="sesi-judul">{u.judul}</div>
+              <div className="sesi-kode">Kode: {u.kode}</div>
 
-            {u.pengerjaanStatus === 'SELESAI' ? (
-              <div className="info">Ujian ini sudah selesai dikerjakan. Hasil akan diumumkan oleh Panitia.</div>
-            ) : u.pengerjaanId ? (
-              <Link className="btn hijau" href={`/peserta/kerjakan/${u.pengerjaanId}`}>Lanjutkan Ujian</Link>
-            ) : (
-              <Link className="btn" href={`/peserta/ujian/${u.id}`}>Buka Ujian</Link>
-            )}
-          </div>
-        ))}
+              {u.bagian.map((b) => (
+                <dl className="sesi-bagian" key={b.tipe}>
+                  <dt className="sesi-tipe">{LABEL[b.tipe]}</dt>
+                  <dd><span>Mulai</span>{fmtWaktu(b.mulai)}</dd>
+                  <dd><span>Durasi</span>{b.durasiMenit} menit</dd>
+                  <dd><span>Batas</span>{fmtWaktu(b.selesai)}</dd>
+                  <dd><span>Status</span>{b.status.replace(/_/g, ' ').toLowerCase()}</dd>
+                </dl>
+              ))}
+
+              <div className="sesi-aksi">
+                {u.pengerjaanStatus === 'SELESAI' ? (
+                  <span className="sesi-n-a">Selesai</span>
+                ) : (
+                  <span className="sesi-n-a">N.A</span>
+                )}
+                {u.pengerjaanStatus === 'SELESAI' ? (
+                  <div className="info-box kecil">Ujian ini sudah selesai dikerjakan. Hasil akan diumumkan oleh Panitia.</div>
+                ) : u.pengerjaanId ? (
+                  <Link className="btn hijau" href={`/peserta/kerjakan/${u.pengerjaanId}`}>Lanjutkan</Link>
+                ) : (
+                  <Link className="btn" href={`/peserta/ujian/${u.id}`}>mulai</Link>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </>
   );
