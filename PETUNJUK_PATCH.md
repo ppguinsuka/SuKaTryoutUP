@@ -1,42 +1,41 @@
-# PATCH DIAGNOSTIK LOGIN — SuKaTryoutUP
+# PATCH SSL CA (DB_SSL) — SuKaTryoutUP
 
-Patch ini **bukan** pengganti konfigurasi Supabase. Patch mengubah pesan galat agar masalah server lebih mudah diidentifikasi, dan menambahkan pemeriksaan database read-only. Tidak memodifikasi schema, akun, atau data.
+Perbaikan khusus untuk respons login `Verifikasi sertifikat SSL database gagal (DB_SSL)` pada aplikasi Next.js `pg` + Supabase. Tidak mengubah tabel/database, kata sandi, role, logika login, atau pengaturan RLS.
 
-## Berkas yang perlu diganti / ditambahkan
+## 1. Ganti 2 file di repo SuKaTryoutUP
 
-1. **Ganti** `src/lib/errors.ts` dengan file dari patch.
-2. **Ganti** `package.json` dengan file dari patch (tambahan perintah `db:check`).
-3. **Tambahkan** `scripts/check-db.mjs` dari patch.
+- **GANTI** `src/lib/db.ts` dengan file patch.
+- **GANTI** `scripts/check-db.mjs` jika patch diagnostik login sebelumnya telah terpasang (direkomendasikan agar hasil tes menggunakan konfigurasi SSL yang sama). Jika belum terpasang, file ini dapat **DITAMBAHKAN**, tetapi `npm run db:check` juga perlu skrip pada package.json dari patch diagnostik sebelumnya.
 
-Lakukan commit/push ke repo proyek SuKaTryoutUP lalu lakukan deploy (termasuk env Production) di Vercel. Jangan memasang patch ini pada proyek lain.
+Tidak perlu mengganti `src/lib/errors.ts` atau `package.json` jika patch diagnostik sebelumnya sudah terpasang.
 
-## Persiapan
+## 2. Ambil sertifikat CA asli (per proyek)
 
-- Supabase > Connect > Transaction Pooler: salin URI, dengan port `6543`.
-- Vercel > Project > Settings > Environment Variables: tambah `DATABASE_URL` untuk Production, lalu redeploy.
-- Peringatan `pg-connection-string` tentang `sslmode=require` **bukan** error login. Untuk mempertahankan verifikasi TLS saat ini, gunakan `sslmode=verify-full` dengan sertifikat CA tepercaya jika dibutuhkan. Jangan gunakan `sslmode=disable` atau `rejectUnauthorized: false` sebagai solusi.
-- Password pada URI harus di-URL-encode jika mengandung karakter khusus (`@`, `#`, `/`, `?`, `:`, `%`).
-- Jangan pernah membagikan `DATABASE_URL` atau menyimpannya di GitHub.
-- Jalankan file `database/001-schema.sql` **hanya pada proyek Supabase yang benar** jika tabel belum ada; jangan jalankan ulang sembarangan pada database berisi data tanpa audit.
+Supabase Dashboard > pilih proyek **SuKaTryoutUP yang benar** > **Project Settings > Database > SSL Configuration** > **Download CA certificate**. Di beberapa versi dashboard, lokasinya **Database Settings > SSL Configuration**. Buka berkas `.crt` / `.cer` dengan editor teks, lalu salin keseluruhan isi PEM dari `-----BEGIN CERTIFICATE-----` sampai `-----END CERTIFICATE-----`.
 
-## Diagnostik lokal
+PENTING: jangan membuat sertifikat sendiri dan jangan mengambil sertifikat dari proyek berbeda. Jika error berubah menjadi `ERR_TLS_CERT_ALTNAME_INVALID`, cek host pooler dari panel Connect dan kecocokan hostname.
 
-1. Buat `.env.local` di root proyek berisi `DATABASE_URL` asli (jangan di-commit).
-2. Jalankan `npm install`, lalu `npm run db:check`.
-3. Perhatikan hasil: koneksi, 21 tabel, Super Admin, dan hak akses dasar.
+## 3. Atur variabel Vercel (server-only)
 
-## Diagnostik deployment
+Vercel > Project SuKaTryoutUP > Settings > Environment Variables > Production:
 
-Buka halaman login dan coba kembali setelah deploy. Kode diagnosis yang mungkin tampil:
+- `DATABASE_URL`: salin **Connection string > Transaction Pooler** langsung dari panel Supabase Connect; biasanya `postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-REGION.pooler.supabase.com:6543/postgres` (bentuk host tergantung proyek). JANGAN kirim URL rahasia ini kepada siapa pun atau commit ke Git. Sebaiknya tanpa `?sslmode=...` karena patch mengatur SSL langsung.
+- `SUPABASE_DB_CA_CERT`: tempel **seluruh PEM sertifikat CA** yang diunduh dari Supabase. Nilai dapat multi-baris; patch juga menerima newline yang tertulis sebagai `\n`.
 
-| Kode | Arti | Langkah |
-|---|---|---|
-| DB_CONFIG | `DATABASE_URL` tidak diset pada runtime | Periksa Vercel Environment Variables dan redeploy |
-| DB_URL | Format URL salah | Salin ulang URI Supabase dari menu Connect |
-| DB_AUTH | Login database ditolak | Periksa password database, username pooler dan project ref |
-| DB_NETWORK | Tidak bisa menjangkau host database | Periksa region/host pooler dan status Supabase |
-| DB_SSL | Sertifikat TLS PostgreSQL tidak bisa diverifikasi | Periksa CA Supabase, hostname, dan konfigurasi SSL |
-| DB_SCHEMA | Tabel database tidak ditemukan | Cek SQL schema di database yang dipakai Vercel |
-| SERVER_ERROR | Kesalahan lain | Buka Vercel Logs dan lihat detail lengkap |
+Patch ini menggunakan `ssl: { ca: ..., rejectUnauthorized: true }`, sehingga TLS dan pemeriksaan identitas server tetap aktif. Tidak memakai `rejectUnauthorized: false`, `sslmode=disable`, ataupun `NODE_TLS_REJECT_UNAUTHORIZED=0`.
 
-Jika salah satu kode sudah tampil, bagikan **kodenya saja** untuk diagnosis lanjutan; jangan bagikan password, token atau URL database.
+## 4. Deploy dan tes
+
+Commit kedua file, push ke repo yang benar, redeploy Vercel **Production**, dan coba login.
+
+Jika menguji lokal, simpan `DATABASE_URL` dan `SUPABASE_DB_CA_CERT` di `.env.local` (jangan di-commit) dan gunakan `npm run db:check` jika skrip telah terdaftar pada package.json. Pastikan hasil tes koneksi dan tabel; jangan menaruh kredensial di chat atau log.
+
+Jika tetap DB_SSL, baca **Vercel > Logs** saat percobaan login dan kirim HANYA kode `pgCode` (contoh `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `ERR_TLS_CERT_ALTNAME_INVALID`, atau `CERT_HAS_EXPIRED`) tanpa URI/password.
+
+## Rujukan
+
+- https://supabase.com/docs/guides/platform/ssl-enforcement
+- https://supabase.com/docs/guides/database/connecting-to-postgres
+- https://node-postgres.com/features/ssl
+
+**Status verifikasi:** sintaks check-db dan struktur patch diperiksa secara lokal; koneksi/sertifikat proyek SuKaTryoutUP tidak tersedia untuk diuji. Tidak ada perubahan pada server pengguna.

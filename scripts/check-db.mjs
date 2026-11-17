@@ -31,7 +31,15 @@ try {
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 10000 });
+const caCert = process.env.SUPABASE_DB_CA_CERT?.replace(/\\n/g, '\n').trim();
+const parsedUrl = new URL(url);
+for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey']) parsedUrl.searchParams.delete(key);
+const pool = new pg.Pool({
+  connectionString: parsedUrl.toString(),
+  ssl: { rejectUnauthorized: true, ...(caCert ? { ca: caCert } : {}) },
+  max: 1,
+  connectionTimeoutMillis: 10000,
+});
 try {
   const c = await pool.query('SELECT current_database() AS nama_db, current_user AS akun');
   console.log('BERHASIL: koneksi PostgreSQL aktif.');
