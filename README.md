@@ -1,0 +1,59 @@
+# SuKaTryoutUP
+
+Aplikasi tryout berbasis Next.js (App Router), PostgreSQL (Supabase), dan Safe Exam Browser (SEB).
+Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
+
+## Fitur
+
+- Login username dan password, dengan pembatasan percobaan login.
+- Empat role: SUPER_ADMIN, PANITIA, PENGAWAS, PESERTA.
+- **Panitia** (`/panitia`): ruang, peserta (termasuk impor CSV), pengawas, soal (pilihan ganda dan esai dengan rubrik), ujian (jadwal dua bagian, soal, SEB, mode token), penugasan peserta ke ruang dan pengawas ke ruang, ekspor esai untuk koreksi AI, impor nilai esai, dan publikasi hasil.
+- **Peserta**: dashboard jadwal dua bagian, token, pakta integritas, pengerjaan satu soal per halaman, grid nomor, tandai ragu, timer dari server, dan hasil yang sudah dipublikasikan. Esai terkunci sampai pilihan ganda selesai.
+- **Pengawas** (`/pengawas`): status peserta per ruang, jumlah jawaban tersimpan, sisa waktu, dan jeda/lanjut. Jeda tidak menambah waktu; waktu tetap berjalan dan jeda hanya memblokir penyimpanan.
+
+## Aturan yang dipakai
+
+- Pilihan ganda dinilai sebagai jumlah jawaban benar. Esai dinilai 0–100 dan dinilai terpisah.
+- Skor esai = rata-rata seluruh soal esai ujian, dengan soal yang tidak dijawab dihitung 0.
+- Satu kali percobaan per peserta per ujian.
+- Peserta hanya melihat ujian untuk Bidang Studi yang ditetapkan Panitia.
+- Ujian yang sudah dikerjakan peserta tidak bisa diubah jadwal, soal, dan penugasannya.
+- Soal yang sudah dipakai ujian aktif atau selesai tidak bisa diubah.
+- Satu peserta hanya boleh punya satu pengerjaan aktif dalam satu waktu.
+
+## Belum ada
+
+- Impor nilai esai dalam format XLSX (saat ini CSV).
+- Penyimpanan status ragu-ragu di server (saat ini hanya di browser).
+- Pengelolaan konfigurasi SEB dan BEK dari antarmuka (saat ini lewat SQL Editor).
+- Halaman riwayat impor (data tersimpan di tabel `impor_nilai`).
+
+## Menjalankan lokal
+
+1. Salin `.env.example` menjadi `.env.local`, lalu isi `DATABASE_URL`.
+2. Jalankan `database/001-schema.sql` di SQL Editor Supabase.
+3. Buat akun pertama. Jangan memakai "Add user" di dashboard Supabase, karena itu membuat akun Supabase Auth yang tidak dipakai aplikasi ini.
+   ```bash
+   npm run db:create-user -- --username admin --nama "Super Admin" --role SUPER_ADMIN --password "password-minimal-12"
+   ```
+   Skrip mencetak perintah `INSERT` berisi hash password. Tempel perintah itu di SQL Editor Supabase lalu jalankan.
+4. Tambahkan file logo UIN Sunan Kalijaga Yogyakarta di `public/logo-uin.png`.
+5. `npm install`, lalu `npm run typecheck` dan `npm run dev`.
+6. Buka `/login`, masuk sebagai Panitia, lalu isi data berurutan: ruang, peserta, pengawas, soal, ujian, penugasan.
+
+## Konfigurasi SEB
+
+- SEB mengirim header `X-SafeExamBrowser-RequestHash` = SHA-256(URL + Browser Exam Key).
+- Simpan BEK di tabel `seb_konfigurasi`, lalu hubungkan ke ujian lewat `ujian_seb`.
+- Ujian yang mewajibkan SEB ditolak jika tidak ada konfigurasi yang cocok. `SEB_ALLOW_UNCONFIGURED=true` hanya untuk pengembangan.
+- Pastikan URL yang diterima server sama dengan URL publik. Di balik proxy, periksa host dan protokolnya.
+
+## Keamanan
+
+- Semua tabel memakai RLS tanpa policy. Aplikasi mengakses database lewat `DATABASE_URL` (pemilik tabel), sehingga tidak terkena RLS. Jangan gunakan anon key untuk akses data dari aplikasi.
+- Token ujian disimpan sebagai teks biasa agar Panitia bisa melihatnya. Pertimbangkan hashing jika kebijakan menuntutnya.
+
+## Catatan
+
+- Kode ini belum dijalankan dan diuji end-to-end. Jalankan `npm run typecheck` dan `npm run build` sebelum deploy, lalu uji skenario Panitia, Pengawas, dan Peserta.
+- Jalankan uji beban sebelum hari H, dengan target 2000 peserta serentak.

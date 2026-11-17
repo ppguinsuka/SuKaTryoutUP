@@ -1,0 +1,140 @@
+import { requireRole } from '@/lib/auth';
+import { withTx } from '@/lib/db';
+import { AppError, jsonError, jsonOk } from '@/lib/errors';
+import {
+  buatUlangToken,
+  detailSoal,
+  detailUjian,
+  eksporEsai,
+  hasilUjian,
+  imporEsai,
+  imporPeserta,
+  listPeserta,
+  listSoal,
+  listUjian,
+  publikasi,
+  rujukan,
+  simpanPeserta,
+  simpanPengawas,
+  simpanPenugasan,
+  simpanRuang,
+  simpanSoal,
+  simpanUjian,
+} from '@/lib/panitia';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const UUID = /^[0-9a-f-]{36}$/i;
+const idParam = (v: string | null, pesan: string): string => {
+  if (!v || !UUID.test(v)) throw new AppError(pesan, 400);
+  return v;
+};
+
+const PANITIA = ['PANITIA', 'SUPER_ADMIN'] as const;
+
+/** Baca data: ?aksi=rujukan | peserta | soal | soal-detail | ujian | ujian-detail | hasil | ekspor-esai */
+export async function GET(req: Request) {
+  try {
+    await requireRole(...PANITIA);
+    const u = new URL(req.url);
+    const aksi = u.searchParams.get('aksi');
+
+    switch (aksi) {
+      case 'rujukan':
+        return jsonOk(await withTx((c) => rujukan(c)));
+      case 'peserta':
+        return jsonOk(await withTx((c) => listPeserta(c, u.searchParams.get('bidang'))));
+      case 'soal':
+        return jsonOk(
+          await withTx((c) => listSoal(c, u.searchParams.get('bidang'), u.searchParams.get('tipe'))),
+        );
+      case 'soal-detail':
+        return jsonOk(await withTx((c) => detailSoal(c, idParam(u.searchParams.get('id'), 'ID soal tidak valid.'))));
+      case 'ujian':
+        return jsonOk(await withTx((c) => listUjian(c)));
+      case 'ujian-detail':
+        return jsonOk(await withTx((c) => detailUjian(c, idParam(u.searchParams.get('id'), 'ID ujian tidak valid.'))));
+      case 'hasil': {
+        const id = idParam(u.searchParams.get('ujianId'), 'ID ujian tidak valid.');
+        return jsonOk(await withTx((c) => hasilUjian(c, id)));
+      }
+      case 'ekspor-esai': {
+        const id = idParam(u.searchParams.get('ujianId'), 'ID ujian tidak valid.');
+        const csv = await withTx((c) => eksporEsai(c, id));
+        return new Response('﻿' + csv, {
+          headers: {
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': `attachment; filename="esai-${id.slice(0, 8)}.csv"`,
+            'Cache-Control': 'no-store',
+          },
+        });
+      }
+      default:
+        throw new AppError('Aksi tidak dikenal.', 400);
+    }
+  } catch (err) {
+    return jsonError(err);
+  }
+}
+
+/** Ubah data: body { aksi, data?, ujianId?, ruangId?, csv?, namaFile? } */
+export async function POST(req: Request) {
+  try {
+    const user = await requireRole(...PANITIA);
+    const body = await req.json().catch(() => ({}));
+    const data = (body.data ?? {}) as Record<string, unknown>;
+
+    switch (body.aksi) {
+      case 'simpan-ruang':
+        await withTx((c) => simpanRuang(c, data));
+        break;
+      case 'simpan-peserta':
+        await withTx((c) => simpanPeserta(c, data));
+        break;
+      case 'simpan-pengawas':
+        await withTx((c) => simpanPengawas(c, data));
+        break;
+      case 'impor-peserta': {
+        const n = await withTx((c) => imporPeserta(c, String(body.csv ?? '')));
+        return jsonOk({ jumlah: n });
+      }
+      case 'simpan-soal': {
+        const id = await withTx((c) => simpanSoal(c, data));
+        return jsonOk({ id });
+      }
+      case 'simpan-ujian': {
+        const id = await withTx((c) => simpanUjian(c, data));
+        return jsonOk({ id });
+      }
+      case 'simpan-penugasan': {
+        const ujianId = idParam(body.ujianId, 'ID ujian tidak valid.');
+        await withTx((c) => simpanPenugasan(c, ujianId, data));
+        break;
+      }
+      case 'buat-ulang-token': {
+        const ujianId = idParam(body.ujianId, 'ID ujian tidak valid.');
+        const ruangId = idParam(body.ruangId, 'ID ruang tidak valid.');
+        await withTx((c) => buatUlangToken(c, ujianId, ruangId));
+        break;
+      }
+      case 'impor-esai': {
+        const ujianId = idParam(body.ujianId, 'ID ujian tidak valid.');
+        const n = await withTx((c) =>
+          imporEsai(c, ujianId, String(body.csv ?? ''), String(body.namaFile ?? 'impor.csv'), user.id),
+        );
+        return jsonOk({ jumlah: n });
+      }
+      case 'publikasi': {
+        const ujianId = idParam(body.ujianId, 'ID ujian tidak valid.');
+        await withTx((c) => publikasi(c, ujianId));
+        break;
+      }
+      default:
+        throw new AppError('Aksi tidak dikenal.', 400);
+    }
+    return jsonOk(null);
+  } catch (err) {
+    return jsonError(err);
+  }
+}
