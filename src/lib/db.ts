@@ -1,32 +1,42 @@
 import { Pool, type PoolClient } from 'pg';
+import { getPgOptions } from './pg-config.mjs';
 
-// Satu pool per instance. Di Vercel, setiap fungsi punya pool sendiri, jadi max dibuat kecil
-// dan koneksi wajib lewat pooler Supabase (port 6543).
+/** Satu pool kecil per instance serverless, dengan TLS terverifikasi. */
 const g = globalThis as unknown as { __sukaPool?: Pool };
 
-// Jika DATABASE_CA_CERT diisi, koneksi SSL memakai sertifikat CA Supabase dan verifikasi penuh.
-// Parameter sslmode di URL dihapus hanya dalam kasus ini, supaya pengaturan di sini yang berlaku.
-// Jika DATABASE_CA_CERT kosong, URL dipakai apa adanya (sslmode di URL tetap berlaku).
-const caPem = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n');
-const urlAsli = process.env.DATABASE_URL;
-const connectionString = caPem
-  ? urlAsli?.replace(/([?&])sslmode=[^&]*(&|$)/, (_m, p1, p2) => (p2 ? p1 : '')).replace(/[?&]$/, '')
-  : urlAsli;
+/**
+ * Pool dibuat ketika query pertama dijalankan, bukan saat modul dimuat.
+ * Jadi error Environment Variables dapat dijelaskan oleh API login dengan aman.
+ */
+export function getPool(): Pool {
+  if (!g.__sukaPool) {
+    g.__sukaPool = new Pool({
+      ...getPgOptions(),
+      max: 3,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 10_000,
+      statement_timeout: 15_000,
+    });
+    g.__sukaPool.on('error', (err: Error & { code?: string }) => {
+      // Jangan log seluruh pesan yang mungkin mengandung identitas DB.
+      console.error('[sukatryoutup] idle-pool-error', err.code ?? err.name);
+    });
+  }
+  return g.__sukaPool;
+}
 
-export const pool: Pool =
-  g.__sukaPool ??
-  (g.__sukaPool = new Pool({
-    connectionString,
-    ssl: caPem ? { ca: caPem, rejectUnauthorized: true } : undefined,
-    max: 3,
-    idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 10_000,
-    statement_timeout: 15_000,
-  }));
+/** Proxy menjaga semua pemanggil pool.query/pool.connect lama tanpa perubahan kode. */
+export const pool: Pool = new Proxy({} as Pool, {
+  get(_target, key: string | symbol) {
+    const instance = getPool();
+    const value = Reflect.get(instance, key);
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+});
 
-/** Menjalankan fungsi dalam satu transaksi. Rollback otomatis jika melempar error. */
+/** Transaksi rollback ketika callback gagal, release koneksi pada akhirnya. */
 export async function withTx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
-  const c = await pool.connect();
+  const c = await getPool().connect();
   try {
     await c.query('BEGIN');
     const result = await fn(c);

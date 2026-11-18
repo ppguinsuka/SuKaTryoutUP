@@ -1,12 +1,13 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Suspense, useState } from 'react';
+import { Eye, EyeOff, GraduationCap, LockKeyhole, ShieldCheck, Users, ClipboardCheck, ArrowRight } from 'lucide-react';
 import { post } from '@/lib/client';
+import '../admin-theme.css';
 
 function LoginForm() {
   const router = useRouter();
-  const params = useSearchParams();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -15,6 +16,7 @@ function LoginForm() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading) return;
     setError(null);
     setLoading(true);
     try {
@@ -30,56 +32,42 @@ function LoginForm() {
     }
   }
 
-  return (
-    <div className="container" style={{ maxWidth: 420, marginTop: 40 }}>
-      <div className="card">
-        <div style={{ textAlign: 'center', marginBottom: 12 }}>
-          {/* Ganti /logo-uin.png dengan file logo UIN Sunan Kalijaga Yogyakarta di folder public */}
-          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" style={{ height: 80 }} />
-          <h2 style={{ marginTop: 8 }}>SuKaTryoutUP</h2>
-          <div style={{ fontSize: 13, color: '#666' }}>Silakan login dengan username dan password</div>
+  return <div className="login-page">
+    <section className="login-brand-panel" aria-label="Tentang SuKaTryoutUP">
+      <div className="login-brand-inner">
+        <div className="login-brand-logo"><span className="brand-emblem"><GraduationCap size={27}/></span><span>SuKaTryoutUP</span></div>
+        <span className="eyebrow light">PLATFORM TRYOUT TERPADU</span>
+        <h1>Persiapan ujian,<br/>lebih terarah.</h1>
+        <p>Sistem tryout UIN Sunan Kalijaga Yogyakarta untuk peserta, panitia, dan pengawas. Kelola jadwal, pengawasan, dan hasil ujian dengan lebih terstruktur.</p>
+        <div className="login-features">
+          <div><ClipboardCheck size={22}/><strong>Manajemen Ujian</strong><small>Pengaturan jadwal, soal, dan sesi tryout.</small></div>
+          <div><Users size={22}/><strong>Ruang & Peserta</strong><small>Penugasan dan pemantauan ruang ujian.</small></div>
+          <div><ShieldCheck size={22}/><strong>Akses Aman</strong><small>Login sesuai peran dan sesi terlindungi.</small></div>
         </div>
-
-        {params.get('info') === 'panitia' && (
-          <div className="info" style={{ marginBottom: 10 }}>Halaman Panitia belum tersedia di versi ini.</div>
-        )}
-
-        <form onSubmit={submit}>
-          <label style={{ fontSize: 14 }}>Username</label>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            required
-            style={{ width: '100%', padding: 9, margin: '4px 0 12px', borderRadius: 6, border: '1px solid #ccd' }}
-          />
-          <label style={{ fontSize: 14 }}>Password</label>
-          <input
-            type={showPw ? 'text' : 'password'}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-            style={{ width: '100%', padding: 9, margin: '4px 0 6px', borderRadius: 6, border: '1px solid #ccd' }}
-          />
-          <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12 }}>
-            <input type="checkbox" checked={showPw} onChange={(e) => setShowPw(e.target.checked)} />
-            Tampilkan password
-          </label>
-          {error && <div className="error">{error}</div>}
-          <button className="btn" type="submit" disabled={loading} style={{ width: '100%' }}>
-            {loading ? 'Memproses…' : 'Login'}
-          </button>
-        </form>
       </div>
-    </div>
-  );
+    </section>
+    <section className="login-form-panel">
+      <div className="login-card">
+        <span className="login-card-logo"><LockKeyhole size={21}/> Portal Pengguna</span>
+        <h2>Selamat datang kembali</h2>
+        <p>Masuk menggunakan akun yang diberikan oleh panitia.</p>
+        <form onSubmit={submit}>
+          <label htmlFor="username">Username</label>
+          <input id="username" type="text" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" placeholder="Masukkan username" required maxLength={120}/>
+          <label htmlFor="password">Password</label>
+          <div className="password-field">
+            <input id="password" type={showPw ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" placeholder="Masukkan password" required maxLength={200}/>
+            <button type="button" onClick={() => setShowPw((v) => !v)} aria-label={showPw ? 'Sembunyikan password' : 'Tampilkan password'}>{showPw ? <EyeOff size={19}/> : <Eye size={19}/>}</button>
+          </div>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <button className="button primary" type="submit" disabled={loading}>{loading ? 'Sedang masuk…' : <>Masuk ke Akun <ArrowRight size={18}/></>}</button>
+        </form>
+        <p className="login-footnote">SuKaTryoutUP · UIN Sunan Kalijaga Yogyakarta</p>
+      </div>
+    </section>
+  </div>;
 }
 
 export default function LoginPage() {
-  return (
-    <Suspense fallback={null}>
-      <LoginForm />
-    </Suspense>
-  );
+  return <Suspense fallback={null}><LoginForm/></Suspense>;
 }

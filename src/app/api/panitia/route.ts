@@ -3,6 +3,7 @@ import { withTx } from '@/lib/db';
 import { AppError, jsonError, jsonOk } from '@/lib/errors';
 import {
   buatUlangToken,
+  dashboardPanitia,
   detailSoal,
   detailUjian,
   eksporEsai,
@@ -41,6 +42,8 @@ export async function GET(req: Request) {
     const aksi = u.searchParams.get('aksi');
 
     switch (aksi) {
+      case 'dashboard':
+        return jsonOk(await withTx((c) => dashboardPanitia(c)));
       case 'rujukan':
         return jsonOk(await withTx((c) => rujukan(c)));
       case 'peserta':

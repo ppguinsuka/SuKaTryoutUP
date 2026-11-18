@@ -1,6 +1,6 @@
 'use client';
 
-import { BarChart3, ClipboardList, FileQuestion, GraduationCap, LogOut, Menu, MonitorCheck, Users, X, type LucideIcon } from 'lucide-react';
+import { BarChart3, ClipboardList, FileQuestion, GraduationCap, LayoutDashboard, LogOut, Menu, MonitorCheck, ShieldCheck, Users, X, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
 export type NavItem<T extends string> = { id: T; label: string; icon?: LucideIcon };
@@ -18,6 +18,7 @@ type Props<T extends string> = {
 
 /** Ikon default per tab Panitia, supaya tampilannya sama dengan panel SuKa Olimpiade. */
 export const IKON_PANITIA: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
   ujian: ClipboardList,
   soal: FileQuestion,
   peserta: Users,
@@ -33,8 +34,9 @@ export function AdminShell<T extends string>({ title, subtitle, nav, active, onS
   return (
     <div className="admin-app">
       <aside className={open ? 'admin-sidebar open' : 'admin-sidebar'}>
-        <div className="sidebar-brand">
-          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" style={{ width: 165, height: 'auto' }} />
+        <div className="sidebar-brand tryout-brand">
+          <span className="brand-emblem"><GraduationCap size={24}/></span>
+          <span className="brand-copy"><strong>SuKaTryout<span>UP</span></strong><small>UIN SUNAN KALIJAGA</small></span>
         </div>
         <button className="sidebar-close" onClick={() => setOpen(false)} aria-label="Tutup menu"><X size={20} /></button>
         <nav>
@@ -76,6 +78,7 @@ export function AdminShell<T extends string>({ title, subtitle, nav, active, onS
             <span>{subtitle}</span>
           </div>
           <div className="topbar-spacer" />
+          <span className="api-mode"><ShieldCheck size={14}/> Panel Tryout</span>
         </header>
         <main className="admin-content">{children}</main>
       </section>

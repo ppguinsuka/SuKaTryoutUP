@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, post } from '@/lib/client';
 import { AdminShell } from '@/components/admin-shell';
+import { PanitiaDashboard } from '@/components/panitia-dashboard';
 import '../admin-theme.css';
 
-type Tab = 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
+type Tab = 'dashboard' | 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
 type Bidang = { kode: string; nama: string };
 type Ruang = { id: string; kode: string; nama: string; kapasitas: number };
 type Seb = { id: string; nama: string; platform: string; aktif: boolean };
@@ -13,6 +14,7 @@ type Pengawas = { id: string; nama: string; username: string };
 type Rujukan = { bidang: Bidang[]; ruang: Ruang[]; seb: Seb[]; pengawas: Pengawas[] };
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'dashboard', label: 'Dashboard' },
   { id: 'ujian', label: 'Ujian' },
   { id: 'soal', label: 'Soal' },
   { id: 'peserta', label: 'Peserta' },
@@ -36,9 +38,10 @@ function keInputLokal(iso?: string | null) {
 }
 
 export default function PanitiaPage() {
-  const [tab, setTab] = useState<Tab>('ujian');
+  const [tab, setTab] = useState<Tab>('dashboard');
   const [rujukan, setRujukan] = useState<Rujukan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [namaPengguna, setNamaPengguna] = useState('');
   const [info, setInfo] = useState<string | null>(null);
 
   const muatRujukan = useCallback(() => {
@@ -49,6 +52,7 @@ export default function PanitiaPage() {
 
   useEffect(() => {
     muatRujukan();
+    api<{ nama: string } | null>('/api/auth/me').then((u) => setNamaPengguna(u?.nama ?? '')).catch(() => undefined);
   }, [muatRujukan]);
 
   async function logout() {
@@ -68,21 +72,21 @@ export default function PanitiaPage() {
     <AdminShell
       title="SuKaTryoutUP"
       subtitle="Panel Panitia"
+      userName={namaPengguna || undefined}
       nav={TABS}
       active={tab}
       onSelect={pilihTab}
       onLogout={logout}
     >
-      <div className="page-header">
-        <div>
-          <h1>{judulTab}</h1>
-        </div>
-      </div>
+      {tab !== 'dashboard' && <div className="page-header">
+        <div><span className="eyebrow">MANAJEMEN TRYOUT</span><h1>{judulTab}</h1><p>Kelola {judulTab.toLowerCase()} sesuai kebutuhan penyelenggaraan tryout.</p></div>
+      </div>}
 
       {error && <div className="notice danger">{error}</div>}
       {info && <div className="notice neutral">{info}</div>}
 
-      {!rujukan && !error && <div>Memuat…</div>}
+      {tab === 'dashboard' && <PanitiaDashboard onNavigate={pilihTab} />}
+      {!rujukan && !error && tab !== 'dashboard' && <div>Memuat…</div>}
       {rujukan && tab === 'ujian' && <UjianTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
       {rujukan && tab === 'soal' && <SoalTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
       {rujukan && tab === 'peserta' && <PesertaTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}

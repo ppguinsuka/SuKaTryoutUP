@@ -77,6 +77,31 @@ export async function rujukan(c: C) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Dashboard Panitia — statistik agregat, tidak memuat jawaban peserta.
+ * ------------------------------------------------------------------ */
+export async function dashboardPanitia(c: C) {
+  const stats = (await c.query(`
+    SELECT
+      (SELECT count(*)::int FROM users WHERE role = 'PESERTA' AND status = 'ACTIVE') AS peserta,
+      (SELECT count(*)::int FROM users WHERE role = 'PENGAWAS' AND status = 'ACTIVE') AS pengawas,
+      (SELECT count(*)::int FROM ruang_ujian) AS ruang,
+      (SELECT count(*)::int FROM soal) AS soal,
+      (SELECT count(*)::int FROM ujian) AS ujian,
+      (SELECT count(*)::int FROM ujian WHERE status = 'AKTIF') AS ujian_aktif,
+      (SELECT count(*)::int FROM pengerjaan WHERE status = 'AKTIF') AS sedang_mengerjakan,
+      (SELECT count(*)::int FROM pengerjaan WHERE status = 'SELESAI') AS selesai
+  `)).rows[0];
+  const terbaru = (await c.query(`
+    SELECT u.id, u.kode, u.judul, u.status, b.nama AS bidang,
+           u.created_at,
+           (SELECT count(*)::int FROM pengerjaan p WHERE p.ujian_id = u.id) AS sudah_mulai
+      FROM ujian u JOIN bidang_studi b ON b.kode = u.bidang_studi_kode
+     ORDER BY u.created_at DESC LIMIT 5
+  `)).rows;
+  return { stats, terbaru };
+}
+
+/* ------------------------------------------------------------------ *
  * Ruang ujian
  * ------------------------------------------------------------------ */
 export async function simpanRuang(c: C, d: Record<string, unknown>) {

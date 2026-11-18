@@ -1,84 +1,41 @@
-/**
- * Jalankan dari root proyek: npm run db:check
- * Node.js >= 20.6: command menjalankan skrip ini dengan --env-file=.env.local.
- * Read-only: tidak menambah, mengubah, atau menghapus data.
- */
-import pg from 'pg';
+/** Diagnostik DB READ ONLY. Tidak mencetak DATABASE_URL, password atau PEM. */
+import { readFileSync, existsSync } from 'node:fs';
+import { Pool } from 'pg';
+import { getPgOptions } from '../src/lib/pg-config.mjs';
 
-const TABLES = [
-  'bidang_studi', 'ruang_ujian', 'seb_konfigurasi', 'users', 'sessions',
-  'login_limits', 'ujian', 'ujian_bagian', 'ujian_seb', 'ujian_ruang_token',
-  'penugasan_ruang', 'penugasan_pengawas', 'soal', 'soal_opsi', 'ujian_soal',
-  'pengerjaan', 'pengerjaan_bagian', 'jawaban', 'impor_nilai', 'nilai_esai',
-  'log_aktivitas',
-];
-
-const url = process.env.DATABASE_URL?.trim();
-if (!url) {
-  console.error('GAGAL [DB_CONFIG]: DATABASE_URL tidak ditemukan di .env.local.');
-  process.exit(1);
-}
-try {
-  const parsed = new URL(url);
-  if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !parsed.hostname || !parsed.username) {
-    throw new Error('Invalid URL');
+if (existsSync('.env.local')) {
+  for (const line of readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^([A-Z_][A-Z_0-9]*)\s*=\s*(.*)$/);
+    if (!m || process.env[m[1]] !== undefined) continue;
+    let value = m[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    process.env[m[1]] = value;
   }
-  if (parsed.port !== '6543') {
-    console.warn('CATATAN: pastikan menggunakan URL Transaction Pooler (umumnya port 6543).');
-  }
-} catch {
-  console.error('GAGAL [DB_URL]: DATABASE_URL bukan URL PostgreSQL yang valid.');
-  process.exit(1);
 }
-
-const caCert = process.env.SUPABASE_DB_CA_CERT?.replace(/\\n/g, '\n').trim();
-const parsedUrl = new URL(url);
-for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey']) parsedUrl.searchParams.delete(key);
-const pool = new pg.Pool({
-  connectionString: parsedUrl.toString(),
-  ssl: { rejectUnauthorized: true, ...(caCert ? { ca: caCert } : {}) },
-  max: 1,
-  connectionTimeoutMillis: 10000,
-});
+let client;
 try {
-  const c = await pool.query('SELECT current_database() AS nama_db, current_user AS akun');
-  console.log('BERHASIL: koneksi PostgreSQL aktif.');
-  console.log(`Database: ${c.rows[0].nama_db}; pengguna: ${c.rows[0].akun}`);
-  const result = await pool.query(
-    `SELECT nama, to_regclass('public.' || nama) IS NOT NULL AS tersedia FROM unnest($1::text[]) AS t(nama)`,
-    [TABLES],
-  );
-  const missing = result.rows.filter((r) => !r.tersedia).map((r) => r.nama);
-  if (missing.length) {
-    console.error(`GAGAL [DB_SCHEMA]: ${TABLES.length - missing.length}/${TABLES.length} tabel ada.`);
-    console.error('Tabel belum ada:', missing.join(', '));
-    process.exitCode = 2;
-  } else {
-    console.log(`BERHASIL: ${TABLES.length}/${TABLES.length} tabel tersedia.`);
-    const a = await pool.query(`SELECT count(*)::int AS jumlah FROM users WHERE role = 'SUPER_ADMIN' AND status = 'ACTIVE'`);
-    if (a.rows[0].jumlah === 0) {
-      console.warn('PERINGATAN: belum ada SUPER_ADMIN aktif di tabel users.');
-    } else {
-      console.log(`BERHASIL: ada ${a.rows[0].jumlah} akun SUPER_ADMIN aktif.`);
+  const pool = new Pool({ ...getPgOptions(), max: 1, connectionTimeoutMillis: 10000 });
+  try {
+    client = await pool.connect();
+    const tables = await client.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`);
+    const names = new Set(tables.rows.map((r) => r.table_name));
+    const needed = ['users','sessions','login_limits','ujian','soal','pengerjaan','jawaban','ruang_ujian'];
+    const missing = needed.filter((name) => !names.has(name));
+    const tls = client.connection?.stream?.encrypted;
+    console.log('Koneksi PostgreSQL: BERHASIL');
+    console.log('TLS client: ' + (tls ? 'AKTIF' : 'TIDAK TERDETEKSI'));
+    console.log('Tabel public: ' + tables.rowCount);
+    console.log('Tabel utama: ' + (missing.length ? 'TIDAK LENGKAP (' + missing.join(', ') + ')' : 'LENGKAP'));
+    if (!missing.length) {
+      const users = await client.query("SELECT count(*)::int AS jumlah FROM users WHERE role = 'SUPER_ADMIN' AND status = 'ACTIVE'");
+      console.log('Super Admin aktif: ' + users.rows[0].jumlah);
     }
-    const priv = await pool.query(`SELECT
-      has_table_privilege(current_user, 'public.login_limits', 'SELECT') AS baca_limit,
-      has_table_privilege(current_user, 'public.login_limits', 'INSERT') AS tulis_limit,
-      has_table_privilege(current_user, 'public.sessions', 'INSERT') AS buat_sesi`);
-    if (!Object.values(priv.rows[0]).every(Boolean)) {
-      console.error('GAGAL [DB_PRIVILEGE]: pengguna koneksi tidak memiliki akses login/sesi yang diperlukan.');
-      process.exitCode = 3;
-    } else {
-      console.log('BERHASIL: hak akses dasar login dan sesi tersedia.');
-    }
+    if (missing.length) process.exitCode = 1;
+  } finally {
+    client?.release();
+    await pool.end();
   }
 } catch (e) {
-  const kode = e.code ?? 'unknown';
-  const jenis = e instanceof Error ? e.name : 'unknown';
-  console.error(`GAGAL [DB_CONNECT]: kode=${kode}, jenis=${jenis}`);
-  console.error('Periksa koneksi, kredensial, sertifikat SSL, dan konfigurasi host pada Supabase/Vercel.');
-  // Jangan menampilkan DATABASE_URL atau kata sandi di log.
+  console.error('Pemeriksaan database gagal. Kode: ' + (e.code ?? e.name ?? 'UNKNOWN'));
   process.exitCode = 1;
-} finally {
-  await pool.end();
 }

@@ -3,11 +3,13 @@
 Aplikasi tryout berbasis Next.js (App Router), PostgreSQL (Supabase), dan Safe Exam Browser (SEB).
 Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
 
+> **Update 18 November 2026:** perbaikan SSL/login dan dashboard Panitia bergaya SuKa Olimpiade. Baca `PANDUAN_PERBAIKAN_18NOV2026.md` sebelum deploy.
+
 ## Fitur
 
 - Login username dan password, dengan pembatasan percobaan login.
 - Empat role: SUPER_ADMIN, PANITIA, PENGAWAS, PESERTA.
-- **Panitia** (`/panitia`): ruang, peserta (termasuk impor CSV), pengawas, soal (pilihan ganda dan esai dengan rubrik), ujian (jadwal dua bagian, soal, SEB, mode token), penugasan peserta ke ruang dan pengawas ke ruang, ekspor esai untuk koreksi AI, impor nilai esai, dan publikasi hasil.
+- **Panitia** (`/panitia`): dashboard statistik, sidebar bergaya SuKa Olimpiade, ruang, peserta (termasuk impor CSV), pengawas, soal (pilihan ganda dan esai dengan rubrik), ujian (jadwal dua bagian, soal, SEB, mode token), penugasan peserta ke ruang dan pengawas ke ruang, ekspor esai untuk koreksi AI, impor nilai esai, dan publikasi hasil.
 - **Peserta**: dashboard jadwal dua bagian, token, pakta integritas, pengerjaan satu soal per halaman, grid nomor, tandai ragu, timer dari server, dan hasil yang sudah dipublikasikan. Esai terkunci sampai pilihan ganda selesai.
 - **Pengawas** (`/pengawas`): status peserta per ruang, jumlah jawaban tersimpan, sisa waktu, dan jeda/lanjut. Jeda tidak menambah waktu; waktu tetap berjalan dan jeda hanya memblokir penyimpanan.
 
@@ -30,7 +32,7 @@ Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
 
 ## Menjalankan lokal
 
-1. Salin `.env.example` menjadi `.env.local`, lalu isi `DATABASE_URL`.
+1. Salin `.env.example` menjadi `.env.local`, lalu isi `DATABASE_URL` dan `SUPABASE_DB_CA_CERT` (jika sertifikat CA Supabase diperlukan).
 2. Jalankan `database/001-schema.sql` di SQL Editor Supabase.
 3. Buat akun pertama. Jangan memakai "Add user" di dashboard Supabase, karena itu membuat akun Supabase Auth yang tidak dipakai aplikasi ini.
    ```bash
@@ -38,7 +40,7 @@ Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
    ```
    Skrip mencetak perintah `INSERT` berisi hash password. Tempel perintah itu di SQL Editor Supabase lalu jalankan.
 4. Tambahkan file logo UIN Sunan Kalijaga Yogyakarta di `public/logo-uin.png`.
-5. `npm install`, lalu `npm run typecheck` dan `npm run dev`.
+5. `npm install`, lalu `npm run test:config`, `npm run db:check`, `npm run typecheck`, dan `npm run dev`.
 6. Buka `/login`, masuk sebagai Panitia, lalu isi data berurutan: ruang, peserta, pengawas, soal, ujian, penugasan.
 
 ## Konfigurasi SEB
