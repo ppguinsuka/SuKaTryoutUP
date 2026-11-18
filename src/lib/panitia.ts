@@ -719,3 +719,333 @@ export async function ubahStatusSeb(c: C, d: Record<string, unknown>): Promise<v
   const r = await c.query('UPDATE seb_konfigurasi SET aktif = $2 WHERE id = $1', [id, !!d.aktif]);
   if (!r.rowCount) throw new AppError('Konfigurasi SEB tidak ditemukan.', 404);
 }
+
+/* ------------------------------------------------------------------ *
+ * Impor Pengawas dan Ruang (Excel/CSV)
+ * ------------------------------------------------------------------ */
+type Header = Record<string, number>;
+function petaHeader(rows: string[][], wajib: string[]): { header: Header; data: string[][] } {
+  if (rows.length < 2) throw new AppError('File kosong atau hanya berisi header.', 400);
+  const header: Header = {};
+  rows[0].forEach((h, i) => { header[h.trim().toLowerCase()] = i; });
+  for (const w of wajib) {
+    if (!(w in header)) throw new AppError(`Header wajib: ${wajib.join(', ')}. Gunakan template yang disediakan.`, 400);
+  }
+  return { header, data: rows.slice(1) };
+}
+const sel = (r: string[], h: Header, k: string) => (h[k] !== undefined ? (r[h[k]] ?? '').trim() : '');
+
+export async function imporPengawas(c: C, rows: string[][]): Promise<number> {
+  const { header, data } = petaHeader(rows, ['username', 'nama', 'password']);
+  const galat: string[] = [];
+  const usernameBerkas = new Set<string>();
+  const valid: { username: string; nama: string; password: string }[] = [];
+  const terpakai = new Set(
+    (await c.query('SELECT lower(username) AS u FROM users')).rows.map((r) => r.u as string),
+  );
+
+  data.forEach((r, i) => {
+    if (r.every((v) => !v)) return;
+    const baris = i + 2;
+    const username = sel(r, header, 'username');
+    const nama = sel(r, header, 'nama');
+    const password = sel(r, header, 'password');
+    const salah: string[] = [];
+    if (!username || /\s/.test(username)) salah.push('username kosong atau mengandung spasi');
+    else if (terpakai.has(username.toLowerCase()) || usernameBerkas.has(username.toLowerCase())) salah.push(`username "${username}" sudah dipakai`);
+    if (!nama) salah.push('nama kosong');
+    if (password.length < 8) salah.push('password minimal 8 karakter');
+    if (salah.length) galat.push(`baris ${baris}: ${salah.join(', ')}`);
+    else {
+      usernameBerkas.add(username.toLowerCase());
+      valid.push({ username, nama, password });
+    }
+  });
+
+  if (galat.length) throw new AppError(`Impor dibatalkan. ${galat.slice(0, 10).join('; ')}`, 400);
+  if (!valid.length) throw new AppError('Tidak ada pengawas yang bisa diimpor.', 400);
+  for (const v of valid) {
+    await c.query(
+      `INSERT INTO users (username, password_hash, nama, role) VALUES ($1, $2, $3, 'PENGAWAS')`,
+      [v.username, await hashPassword(v.password), v.nama],
+    );
+  }
+  return valid.length;
+}
+
+export async function imporRuang(c: C, rows: string[][]): Promise<number> {
+  const { header, data } = petaHeader(rows, ['kode', 'nama', 'kapasitas']);
+  const galat: string[] = [];
+  const kodeBerkas = new Set<string>();
+  const valid: { kode: string; nama: string; kapasitas: number }[] = [];
+
+  data.forEach((r, i) => {
+    if (r.every((v) => !v)) return;
+    const baris = i + 2;
+    const kode = sel(r, header, 'kode');
+    const nama = sel(r, header, 'nama');
+    const kap = Number(sel(r, header, 'kapasitas'));
+    const salah: string[] = [];
+    if (!kode) salah.push('kode kosong');
+    else if (kodeBerkas.has(kode)) salah.push(`kode "${kode}" ganda di berkas`);
+    if (!nama) salah.push('nama kosong');
+    if (!Number.isInteger(kap) || kap < 1) salah.push('kapasitas harus angka bulat minimal 1');
+    if (salah.length) galat.push(`baris ${baris}: ${salah.join(', ')}`);
+    else {
+      kodeBerkas.add(kode);
+      valid.push({ kode, nama, kapasitas: kap });
+    }
+  });
+
+  if (galat.length) throw new AppError(`Impor dibatalkan. ${galat.slice(0, 10).join('; ')}`, 400);
+  if (!valid.length) throw new AppError('Tidak ada ruang yang bisa diimpor.', 400);
+  for (const v of valid) {
+    await c.query(
+      `INSERT INTO ruang_ujian (kode, nama, kapasitas) VALUES ($1, $2, $3)
+       ON CONFLICT (kode) DO UPDATE SET nama = EXCLUDED.nama, kapasitas = EXCLUDED.kapasitas`,
+      [v.kode, v.nama, v.kapasitas],
+    );
+  }
+  return valid.length;
+}
+
+/** Ringkasan ruang untuk monitoring Super Admin: ruang yang punya penugasan pada ujian ini. */
+export async function daftarRuangMonitoring(c: C, ujianId: string) {
+  return (
+    await c.query(
+      `SELECT r.id, r.kode, r.nama, r.kapasitas,
+              (SELECT count(*)::int FROM penugasan_ruang pr WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id) AS peserta,
+              (SELECT count(*)::int FROM penugasan_ruang pr JOIN pengerjaan p ON p.ujian_id = pr.ujian_id AND p.user_id = pr.user_id
+                WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id AND p.status = 'AKTIF') AS sedang,
+              (SELECT count(*)::int FROM penugasan_ruang pr JOIN pengerjaan p ON p.ujian_id = pr.ujian_id AND p.user_id = pr.user_id
+                WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id AND p.status = 'SELESAI') AS selesai,
+              (SELECT count(*)::int FROM penugasan_ruang pr JOIN pengerjaan p ON p.ujian_id = pr.ujian_id AND p.user_id = pr.user_id
+                WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id AND p.dijeda_sejak IS NOT NULL) AS dijeda,
+              (SELECT COALESCE(string_agg(u.nama, ', ' ORDER BY u.nama), '') FROM penugasan_pengawas pp
+                JOIN users u ON u.id = pp.pengawas_id WHERE pp.ujian_id = $1 AND pp.ruang_id = r.id) AS pengawas
+         FROM ruang_ujian r
+        WHERE EXISTS (SELECT 1 FROM penugasan_ruang pr WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id)
+           OR EXISTS (SELECT 1 FROM penugasan_pengawas pp WHERE pp.ujian_id = $1 AND pp.ruang_id = r.id)
+        ORDER BY r.kode`,
+      [ujianId],
+    )
+  ).rows;
+}
+
+/* ------------------------------------------------------------------ *
+ * Log aktivitas
+ * ------------------------------------------------------------------ */
+export async function catatLog(c: C, pelakuId: string, aksi: string, target: string | null, detail?: unknown) {
+  await c.query(
+    'INSERT INTO log_aktivitas (pelaku, aksi, target, detail) VALUES ($1, $2, $3, $4)',
+    [pelakuId, aksi, target, detail === undefined ? null : JSON.stringify(detail)],
+  );
+}
+
+export async function listLog(c: C) {
+  return (
+    await c.query(
+      `SELECT l.waktu, COALESCE(u.nama, '-') AS pelaku, l.aksi, l.target, l.detail
+         FROM log_aktivitas l LEFT JOIN users u ON u.id = l.pelaku
+        ORDER BY l.waktu DESC LIMIT 200`,
+    )
+  ).rows;
+}
+
+/* ------------------------------------------------------------------ *
+ * Reset password peserta: password baru dibuat server dan hanya
+ * ditampilkan sekali kepada Panitia. Sesi lama peserta dihapus.
+ * ------------------------------------------------------------------ */
+export async function resetPasswordPeserta(c: C, id: string): Promise<{ username: string; password: string }> {
+  uuid(id, 'ID peserta tidak valid.');
+  const password = Array.from(randomBytes(10), (x) => ALFABET_TOKEN[x % ALFABET_TOKEN.length]).join('');
+  const r = await c.query(
+    `UPDATE users SET password_hash = $2, updated_at = now()
+      WHERE id = $1 AND role = 'PESERTA' RETURNING username`,
+    [id, await hashPassword(password)],
+  );
+  if (!r.rowCount) throw new AppError('Peserta tidak ditemukan.', 404);
+  await c.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+  return { username: r.rows[0].username, password };
+}
+
+/* ------------------------------------------------------------------ *
+ * Salin ujian: judul, bagian dan jadwal, soal, SEB, penugasan ruang
+ * dan pengawas, serta token per ruang yang baru. Hasil peserta tidak disalin.
+ * ------------------------------------------------------------------ */
+export async function salinUjian(c: C, ujianId: string, pelakuId: string): Promise<string> {
+  uuid(ujianId, 'ID ujian tidak valid.');
+  const u = (await c.query('SELECT * FROM ujian WHERE id = $1', [ujianId])).rows[0];
+  if (!u) throw new AppError('Ujian tidak ditemukan.', 404);
+
+  const baru = (
+    await c.query(
+      `INSERT INTO ujian (kode, judul, bidang_studi_kode, mode_token, token_sama, seb_wajib, status, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, 'DRAFT', $7) RETURNING id`,
+      [
+        `${u.kode}-S${buatToken().slice(0, 4)}`,
+        `${u.judul} (Salinan)`,
+        u.bidang_studi_kode,
+        u.mode_token,
+        u.mode_token === 'SAMA' ? buatToken() : null,
+        u.seb_wajib,
+        pelakuId,
+      ],
+    )
+  ).rows[0].id as string;
+
+  await c.query(
+    `INSERT INTO ujian_bagian (ujian_id, tipe, durasi_menit, mulai, selesai)
+     SELECT $1, tipe, durasi_menit, mulai, selesai FROM ujian_bagian WHERE ujian_id = $2`,
+    [baru, ujianId],
+  );
+  await c.query('INSERT INTO ujian_soal (ujian_id, soal_id, urutan) SELECT $1, soal_id, urutan FROM ujian_soal WHERE ujian_id = $2', [baru, ujianId]);
+  await c.query('INSERT INTO ujian_seb (ujian_id, konfigurasi_id) SELECT $1, konfigurasi_id FROM ujian_seb WHERE ujian_id = $2', [baru, ujianId]);
+  await c.query('INSERT INTO penugasan_ruang (ujian_id, user_id, ruang_id) SELECT $1, user_id, ruang_id FROM penugasan_ruang WHERE ujian_id = $2', [baru, ujianId]);
+  await c.query(
+    'INSERT INTO penugasan_pengawas (ujian_id, ruang_id, pengawas_id) SELECT $1, ruang_id, pengawas_id FROM penugasan_pengawas WHERE ujian_id = $2',
+    [baru, ujianId],
+  );
+  if (u.mode_token === 'PER_RUANG') {
+    const ruang = (await c.query('SELECT ruang_id FROM ujian_ruang_token WHERE ujian_id = $1', [ujianId])).rows;
+    for (const r of ruang) {
+      await c.query('INSERT INTO ujian_ruang_token (ujian_id, ruang_id, token) VALUES ($1, $2, $3)', [baru, r.ruang_id, buatToken()]);
+    }
+  }
+  return baru;
+}
+
+/* ------------------------------------------------------------------ *
+ * Berita acara: dibuat dari data pengerjaan, dikirim setelah ujian
+ * selesai, lalu disimpan sebagai salinan (snapshot) per ruang.
+ * ------------------------------------------------------------------ */
+/** Ujian dianggap selesai jika waktu seluruh bagian sudah lewat atau status ujian sudah SELESAI. */
+async function sudahSelesai(c: C, ujianId: string): Promise<boolean> {
+  const r = (
+    await c.query(
+      `SELECT (now() >= (SELECT max(selesai) FROM ujian_bagian WHERE ujian_id = $1)
+               OR u.status IN ('SELESAI', 'DIPUBLIKASIKAN', 'ARSIP')) AS siap
+         FROM ujian u WHERE u.id = $1`,
+      [ujianId],
+    )
+  ).rows[0];
+  if (!r) throw new AppError('Ujian tidak ditemukan.', 404);
+  return r.siap === true;
+}
+
+async function susunBeritaAcara(c: C, ujianId: string, ruangId: string) {
+  const u = (
+    await c.query(
+      `SELECT u.kode, u.judul, b.nama AS bidang,
+              (SELECT min(mulai) FROM ujian_bagian WHERE ujian_id = u.id) AS mulai,
+              (SELECT max(selesai) FROM ujian_bagian WHERE ujian_id = u.id) AS selesai
+         FROM ujian u JOIN bidang_studi b ON b.kode = u.bidang_studi_kode WHERE u.id = $1`,
+      [ujianId],
+    )
+  ).rows[0];
+  const r = (await c.query('SELECT kode, nama, kapasitas FROM ruang_ujian WHERE id = $1', [ruangId])).rows[0];
+  if (!u || !r) throw new AppError('Ujian atau ruang tidak ditemukan.', 404);
+
+  const pengawas = (
+    await c.query(
+      `SELECT us.nama FROM penugasan_pengawas pp JOIN users us ON us.id = pp.pengawas_id
+        WHERE pp.ujian_id = $1 AND pp.ruang_id = $2 ORDER BY us.nama`,
+      [ujianId, ruangId],
+    )
+  ).rows.map((x) => x.nama as string);
+
+  const peserta = (
+    await c.query(
+      `SELECT us.nama, us.username, p.status AS status_pengerjaan, p.skor_pilihan_ganda,
+              p.pelanggaran_fokus, p.total_jeda_detik
+         FROM penugasan_ruang pr
+         JOIN users us ON us.id = pr.user_id
+         LEFT JOIN pengerjaan p ON p.ujian_id = pr.ujian_id AND p.user_id = pr.user_id
+        WHERE pr.ujian_id = $1 AND pr.ruang_id = $2
+        ORDER BY us.nama`,
+      [ujianId, ruangId],
+    )
+  ).rows.map((p) => ({
+    nama: p.nama as string,
+    username: p.username as string,
+    status: (p.status_pengerjaan ?? 'TIDAK_HADIR') as string,
+    skorPilihanGanda: p.skor_pilihan_ganda as number | null,
+    pelanggaranFokus: Number(p.pelanggaran_fokus ?? 0),
+    totalJedaDetik: Number(p.total_jeda_detik ?? 0),
+  }));
+
+  const hitung = (f: (p: (typeof peserta)[number]) => boolean) => peserta.filter(f).length;
+  return {
+    ujian: { kode: u.kode as string, judul: u.judul as string, bidang: u.bidang as string, mulai: u.mulai, selesai: u.selesai },
+    ruang: { kode: r.kode as string, nama: r.nama as string, kapasitas: r.kapasitas as number },
+    pengawas,
+    peserta,
+    ringkasan: {
+      jumlahPeserta: peserta.length,
+      hadir: hitung((p) => p.status !== 'TIDAK_HADIR'),
+      tidakHadir: hitung((p) => p.status === 'TIDAK_HADIR'),
+      selesai: hitung((p) => p.status === 'SELESAI'),
+      masihAktif: hitung((p) => p.status === 'AKTIF'),
+      totalPelanggaranFokus: peserta.reduce((n, p) => n + p.pelanggaranFokus, 0),
+    },
+  };
+}
+
+/** Daftar ruang beserta status berita acara untuk satu ujian. */
+export async function daftarBeritaAcara(c: C, ujianId: string) {
+  uuid(ujianId, 'ID ujian tidak valid.');
+  const siap = await sudahSelesai(c, ujianId);
+  const ruang = (
+    await c.query(
+      `SELECT r.id, r.kode, r.nama,
+              (SELECT count(*)::int FROM penugasan_ruang pr WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id) AS peserta,
+              (SELECT COALESCE(string_agg(us.nama, ', ' ORDER BY us.nama), '') FROM penugasan_pengawas pp
+                 JOIN users us ON us.id = pp.pengawas_id WHERE pp.ujian_id = $1 AND pp.ruang_id = r.id) AS pengawas,
+              ba.dikirim_at
+         FROM ruang_ujian r
+         LEFT JOIN berita_acara ba ON ba.ujian_id = $1 AND ba.ruang_id = r.id
+        WHERE EXISTS (SELECT 1 FROM penugasan_ruang pr WHERE pr.ujian_id = $1 AND pr.ruang_id = r.id)
+        ORDER BY r.kode`,
+      [ujianId],
+    )
+  ).rows;
+  return { siap, ruang };
+}
+
+/** Isi berita acara: salinan jika sudah dikirim, pratinjau jika belum. */
+export async function bacaBeritaAcara(c: C, ujianId: string, ruangId: string) {
+  uuid(ujianId, 'ID ujian tidak valid.');
+  uuid(ruangId, 'ID ruang tidak valid.');
+  const siap = await sudahSelesai(c, ujianId);
+  const kirim = (
+    await c.query(
+      `SELECT ba.isi, ba.dikirim_at, COALESCE(us.nama, '-') AS dikirim_oleh
+         FROM berita_acara ba LEFT JOIN users us ON us.id = ba.dikirim_oleh
+        WHERE ba.ujian_id = $1 AND ba.ruang_id = $2`,
+      [ujianId, ruangId],
+    )
+  ).rows[0];
+  if (kirim) {
+    return { terkirim: true, siap, dikirimAt: kirim.dikirim_at, dikirimOleh: kirim.dikirim_oleh, data: kirim.isi };
+  }
+  return { terkirim: false, siap, dikirimAt: null, dikirimOleh: null, data: await susunBeritaAcara(c, ujianId, ruangId) };
+}
+
+export async function kirimBeritaAcara(c: C, ujianId: string, ruangId: string, pelakuId: string) {
+  uuid(ujianId, 'ID ujian tidak valid.');
+  uuid(ruangId, 'ID ruang tidak valid.');
+  if (!(await sudahSelesai(c, ujianId))) {
+    throw new AppError('Berita acara hanya dapat dikirim setelah ujian selesai.', 409);
+  }
+  const sudah = (await c.query('SELECT 1 FROM berita_acara WHERE ujian_id = $1 AND ruang_id = $2', [ujianId, ruangId])).rowCount;
+  if (sudah) throw new AppError('Berita acara ruang ini sudah dikirim.', 409);
+
+  const isi = await susunBeritaAcara(c, ujianId, ruangId);
+  if (isi.peserta.length === 0) throw new AppError('Ruang ini belum memiliki peserta.', 400);
+
+  await c.query(
+    'INSERT INTO berita_acara (ujian_id, ruang_id, isi, dikirim_oleh) VALUES ($1, $2, $3, $4)',
+    [ujianId, ruangId, JSON.stringify(isi), pelakuId],
+  );
+  return isi.ruang.kode;
+}

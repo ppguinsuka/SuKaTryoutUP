@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireRole('PENGAWAS');
+    const user = await requireRole('PENGAWAS', 'SUPER_ADMIN');
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
     if (body.aksi !== 'jeda' && body.aksi !== 'lanjut') throw new AppError('Aksi tidak dikenal.', 400);

@@ -32,10 +32,41 @@ export function bacaBerkas(buf: Buffer, namaFile: string): Baris {
 
 /** Membuat berkas template Excel untuk impor. */
 export function buatTemplate(
-  jenis: 'peserta' | 'esai' | 'soal',
+  jenis: 'peserta' | 'esai' | 'soal' | 'pengawas' | 'ruang',
   bidang: { kode: string; nama: string }[],
 ): Buffer {
   const wb = XLSX.utils.book_new();
+
+  if (jenis === 'pengawas' || jenis === 'ruang') {
+    const header = jenis === 'pengawas' ? ['username', 'nama', 'password'] : ['kode', 'nama', 'kapasitas'];
+    const contoh = jenis === 'pengawas'
+      ? ['pengawas01', 'Contoh Pengawas', 'contohpassword']
+      : ['R-01', 'Ruang 1 Gedung Utama', '30'];
+    const ws = XLSX.utils.aoa_to_sheet([header, contoh]);
+    ws['!cols'] = header.map(() => ({ wch: 26 }));
+    XLSX.utils.book_append_sheet(wb, ws, jenis === 'pengawas' ? 'Pengawas' : 'Ruang');
+    const petunjuk = jenis === 'pengawas'
+      ? [
+          ['Petunjuk impor pengawas'],
+          [''],
+          ['username: unik, tanpa spasi. Pengawas login memakai username ini.'],
+          ['nama: nama lengkap.'],
+          ['password: minimal 8 karakter.'],
+          ['Pengawas tidak terikat bidang studi. Penugasan ruang dilakukan di panel Panitia.'],
+          ['Hapus baris contoh sebelum mengimpor. Satu baris salah membatalkan seluruh impor.'],
+        ]
+      : [
+          ['Petunjuk impor ruang'],
+          [''],
+          ['kode: unik per ruang, misalnya R-01.'],
+          ['nama: nama ruang atau lokasi.'],
+          ['kapasitas: angka bulat minimal 1.'],
+          ['Jika kode sudah ada, nama dan kapasitasnya diperbarui.'],
+          ['Hapus baris contoh sebelum mengimpor. Satu baris salah membatalkan seluruh impor.'],
+        ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(petunjuk), 'Petunjuk');
+    return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  }
 
   if (jenis === 'soal') {
     const header = ['kode', 'bidang', 'tipe', 'isi', 'opsi_a', 'opsi_b', 'opsi_c', 'opsi_d', 'opsi_e', 'kunci', 'rubrik', 'status'];
@@ -118,5 +149,14 @@ export function buatTemplate(
     );
   }
 
+  return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+}
+
+/** Membuat berkas .xlsx dari beberapa lembar (untuk ekspor hasil dan lain-lain). */
+export function buatXlsx(lembar: { nama: string; baris: (string | number | null)[][] }[]): Buffer {
+  const wb = XLSX.utils.book_new();
+  for (const l of lembar) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(l.baris), l.nama.slice(0, 31));
+  }
   return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 }

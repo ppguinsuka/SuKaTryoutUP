@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { api, post } from '@/lib/client';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { api, fmtDetik, fmtWaktu, post } from '@/lib/client';
 import { AdminShell } from '@/components/admin-shell';
 import { PanitiaDashboard } from '@/components/panitia-dashboard';
 import { RichEditor } from '@/components/rich-editor';
+import { MonitoringRuangTable } from '@/components/monitoring-ruang';
 import { teksPolos } from '@/lib/konten';
 import '../admin-theme.css';
 
@@ -18,7 +19,7 @@ function fileKeBase64(file: File): Promise<string> {
   });
 }
 
-type Tab = 'dashboard' | 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
+type Tab = 'dashboard' | 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai' | 'berita' | 'log' | 'monitoring';
 type Bidang = { kode: string; nama: string };
 type Ruang = { id: string; kode: string; nama: string; kapasitas: number };
 type Seb = { id: string; nama: string; platform: string; aktif: boolean; jumlah_ujian: number };
@@ -33,6 +34,8 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'pengawas', label: 'Pengawas' },
   { id: 'ruang', label: 'Ruang' },
   { id: 'nilai', label: 'Nilai Esai & Hasil' },
+  { id: 'berita', label: 'Berita Acara' },
+  { id: 'log', label: 'Log Aktivitas' },
 ];
 
 async function aksi<T = unknown>(body: Record<string, unknown>) {
@@ -72,20 +75,26 @@ export default function PanitiaPage() {
     window.location.href = '/login';
   }
 
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    api<{ role: string } | null>('/api/auth/me').then((d) => setRole(d?.role ?? null)).catch(() => setRole(null));
+  }, []);
+  const tabNav: { id: Tab; label: string }[] = role === 'SUPER_ADMIN' ? [...TABS, { id: 'monitoring', label: 'Monitoring' }] : TABS;
+
   function pilihTab(id: Tab) {
     setTab(id);
     setError(null);
     setInfo(null);
   }
 
-  const judulTab = TABS.find((t) => t.id === tab)?.label ?? '';
+  const judulTab = tabNav.find((t) => t.id === tab)?.label ?? '';
 
   return (
     <AdminShell
       title="SuKaTryoutUP"
       subtitle="Panel Panitia"
       userName={namaPengguna || undefined}
-      nav={TABS}
+      nav={tabNav}
       active={tab}
       onSelect={pilihTab}
       onLogout={logout}
@@ -98,6 +107,7 @@ export default function PanitiaPage() {
       {info && <div className="notice neutral">{info}</div>}
 
       {tab === 'dashboard' && <PanitiaDashboard onNavigate={pilihTab} />}
+      {tab === 'monitoring' && role === 'SUPER_ADMIN' && <MonitoringTab setError={setError} />}
       {!rujukan && !error && tab !== 'dashboard' && <div>Memuat…</div>}
       {rujukan && tab === 'ujian' && <UjianTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
       {rujukan && tab === 'soal' && <SoalTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
@@ -105,6 +115,8 @@ export default function PanitiaPage() {
       {rujukan && tab === 'pengawas' && <PengawasTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
       {rujukan && tab === 'ruang' && <RuangTab rujukan={rujukan} onRefresh={muatRujukan} setError={setError} setInfo={setInfo} />}
       {rujukan && tab === 'nilai' && <NilaiTab rujukan={rujukan} setError={setError} setInfo={setInfo} />}
+      {rujukan && tab === 'berita' && <BeritaTab setError={setError} setInfo={setInfo} />}
+      {tab === 'log' && <LogTab setError={setError} />}
     </AdminShell>
   );
 }
@@ -119,6 +131,16 @@ type Props = {
  * Ruang
  * ------------------------------------------------------------------ */
 function RuangTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh: () => void }) {
+  async function imporBerkas(file: File): Promise<boolean> {
+    setError(null);
+    try {
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-ruang', berkas: await fileKeBase64(file), namaFile: file.name });
+      setInfo(`${r.jumlah} ruang berhasil diimpor.`);
+      onRefresh();
+      return true;
+    } catch (e) { setError((e as Error).message); return false; }
+  }
+
   const [form, setForm] = useState({ id: '', kode: '', nama: '', kapasitas: '30' });
 
   async function simpan() {
@@ -158,6 +180,147 @@ function RuangTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
         </div>
         <div style={{ marginTop: 10 }}><button className="btn" onClick={simpan}>Simpan</button></div>
       </div>
+      <div className="card">
+        <ImporBox
+          judul="Impor Ruang (Excel)"
+          petunjuk={[
+            <>Unduh template, lalu isi kolom <code>kode</code>, <code>nama</code>, dan <code>kapasitas</code>.</>,
+            <><code>kode</code> harus unik. Jika sudah ada, nama dan kapasitasnya diperbarui.</>,
+            <><code>kapasitas</code> berupa angka bulat minimal 1.</>,
+          ]}
+          templateHref="/api/panitia?aksi=template-ruang"
+          onImport={imporBerkas}
+        />
+      </div>
+    </>
+  );
+}
+
+/** Kotak impor seragam: petunjuk bernomor, unduh template, pilih berkas, lalu impor. */
+function ImporBox({
+  judul,
+  pengantar,
+  petunjuk,
+  templateHref,
+  onImport,
+}: {
+  judul: string;
+  pengantar?: string;
+  petunjuk: ReactNode[];
+  templateHref: string;
+  onImport: (berkas: File) => Promise<boolean>;
+}) {
+  const [berkas, setBerkas] = useState<File | null>(null);
+  const [kunci, setKunci] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  async function jalankan() {
+    if (!berkas) return;
+    setBusy(true);
+    const ok = await onImport(berkas);
+    setBusy(false);
+    if (ok) {
+      setBerkas(null);
+      setKunci((k) => k + 1);
+    }
+  }
+
+  return (
+    <div className="import-box">
+      <h4>{judul}</h4>
+      {pengantar && <p className="import-intro">{pengantar}</p>}
+      <ol>
+        {petunjuk.map((p, i) => <li key={i}>{p}</li>)}
+      </ol>
+      <div className="import-actions">
+        <a className="btn outline" href={templateHref}>Unduh Template Excel</a>
+        <input key={kunci} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setBerkas(e.target.files?.[0] ?? null)} />
+        <button className="btn" disabled={!berkas || busy} onClick={jalankan}>
+          {busy ? 'Mengimpor…' : 'Impor'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type RuangMonitoring = { id: string; kode: string; nama: string; kapasitas: number; peserta: number; sedang: number; selesai: number; dijeda: number; pengawas: string };
+
+/** Monitoring Super Admin: daftar ruang yang bisa diklik, lalu masuk ke tabel peserta ruang tersebut. */
+function MonitoringTab({ setError }: { setError: (m: string | null) => void }) {
+  const [ujianList, setUjianList] = useState<{ id: string; kode: string; judul: string }[]>([]);
+  const [ujianId, setUjianId] = useState('');
+  const [ruangList, setRuangList] = useState<RuangMonitoring[]>([]);
+  const [ruang, setRuang] = useState<RuangMonitoring | null>(null);
+
+  useEffect(() => {
+    baca<{ id: string; kode: string; judul: string }[]>('aksi=ujian')
+      .then((d) => { setUjianList(d); if (d[0]) setUjianId(d[0].id); })
+      .catch((e: Error) => setError(e.message));
+  }, [setError]);
+
+  useEffect(() => {
+    if (!ujianId) return;
+    setRuang(null);
+    const muatRuang = () =>
+      baca<RuangMonitoring[]>(`aksi=ruang-monitoring&ujianId=${ujianId}`)
+        .then(setRuangList)
+        .catch((e: Error) => setError(e.message));
+    muatRuang();
+    const t = setInterval(muatRuang, 15_000);
+    return () => clearInterval(t);
+  }, [ujianId, setError]);
+
+  return (
+    <>
+      <div className="card">
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <b>Ujian</b>
+          <select value={ujianId} onChange={(e) => setUjianId(e.target.value)} style={{ maxWidth: 420 }}>
+            {ujianList.map((u) => <option key={u.id} value={u.id}>{u.kode} – {u.judul}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {!ruang && (
+        <div className="card">
+          <h3>Ruang Ujian</h3>
+          <div className="notice neutral" style={{ fontSize: 13 }}>Klik baris ruang untuk memantau peserta di ruang tersebut.</div>
+          <table className="tabel">
+            <thead>
+              <tr>
+                <th>Kode</th><th>Nama</th><th>Kapasitas</th><th>Peserta</th><th>Sedang ujian</th><th>Selesai</th><th>Dijeda</th><th>Pengawas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ruangList.map((r) => (
+                <tr key={r.id} className="klik-baris" onClick={() => setRuang(r)}>
+                  <td><b>{r.kode}</b></td>
+                  <td>{r.nama}</td>
+                  <td>{r.kapasitas}</td>
+                  <td>{r.peserta}</td>
+                  <td>{r.sedang}</td>
+                  <td>{r.selesai}</td>
+                  <td>{r.dijeda}</td>
+                  <td>{r.pengawas || '—'}</td>
+                </tr>
+              ))}
+              {ruangList.length === 0 && (
+                <tr><td colSpan={8}>Belum ada ruang dengan penugasan pada ujian ini.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {ruang && (
+        <div className="card">
+          <div className="monitor-breadcrumb">
+            <button className="btn outline" onClick={() => setRuang(null)}>← Daftar ruang</button>
+            <b>Ruang {ruang.kode} – {ruang.nama}</b>
+          </div>
+          <MonitoringRuangTable ujianId={ujianId} ruangId={ruang.id} onError={setError} />
+        </div>
+      )}
     </>
   );
 }
@@ -166,7 +329,6 @@ function RuangTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
  * Peserta (termasuk impor CSV)
  * ------------------------------------------------------------------ */
 function PesertaTab({ rujukan, setError, setInfo }: Props) {
-  const [berkas, setBerkas] = useState<File | null>(null);
   const [bidang, setBidang] = useState('');
   const [daftar, setDaftar] = useState<{ id: string; username: string; nama: string; bidang: string; status: string }[]>([]);
   const [form, setForm] = useState({ id: '', username: '', nama: '', bidang: '237', password: '', status: 'ACTIVE' });
@@ -187,15 +349,23 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
     } catch (e) { setError((e as Error).message); }
   }
 
-  async function imporBerkas() {
-    if (!berkas) return;
+  async function resetPassword(p: { id: string; username: string; nama: string }) {
+    if (!window.confirm(`Buat password baru untuk ${p.nama}? Password lama tidak berlaku dan sesi peserta diakhiri.`)) return;
     setError(null);
     try {
-      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-peserta', berkas: await fileKeBase64(berkas), namaFile: berkas.name });
-      setInfo(`${r.jumlah} peserta berhasil diimpor.`);
-      setBerkas(null);
-      muat();
+      const r = await aksi<{ username: string; password: string }>({ aksi: 'reset-password-peserta', data: { id: p.id } });
+      setInfo(`Password baru untuk ${r.username}: ${r.password}. Catat sekarang, password ini tidak ditampilkan lagi.`);
     } catch (e) { setError((e as Error).message); }
+  }
+
+  async function imporBerkas(file: File): Promise<boolean> {
+    setError(null);
+    try {
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-peserta', berkas: await fileKeBase64(file), namaFile: file.name });
+      setInfo(`${r.jumlah} peserta berhasil diimpor.`);
+      muat();
+      return true;
+    } catch (e) { setError((e as Error).message); return false; }
   }
 
   return (
@@ -215,7 +385,10 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
               {daftar.map((p) => (
                 <tr key={p.id}>
                   <td>{p.username}</td><td>{p.nama}</td><td>{p.bidang}</td><td>{p.status}</td>
-                  <td><button className="btn outline" onClick={() => setForm({ id: p.id, username: p.username, nama: p.nama, bidang: p.bidang, password: '', status: p.status })}>Ubah</button></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <button className="btn outline" onClick={() => setForm({ id: p.id, username: p.username, nama: p.nama, bidang: p.bidang, password: '', status: p.status })}>Ubah</button>{' '}
+                    <button className="btn outline" onClick={() => resetPassword(p)}>Reset password</button>
+                  </td>
                 </tr>
               ))}
               {daftar.length === 0 && <tr><td colSpan={5}>Belum ada peserta.</td></tr>}
@@ -242,15 +415,17 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
       </div>
 
       <div className="card">
-        <h3>Impor Peserta (Excel)</h3>
-        <div className="notice neutral" style={{ fontSize: 13 }}>
-          Unduh template terlebih dahulu. Kolom: <code>username, nama, bidang, password</code>. Bidang berupa kode 3 digit, misalnya 237. Satu baris salah membatalkan seluruh impor.
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <a className="btn outline" href="/api/panitia?aksi=template-peserta">Unduh Template Excel</a>
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setBerkas(e.target.files?.[0] ?? null)} />
-          <button className="btn" disabled={!berkas} onClick={imporBerkas}>Impor</button>
-        </div>
+        <ImporBox
+          judul="Impor Peserta (Excel)"
+          petunjuk={[
+            <>Unduh template, lalu isi kolom <code>username</code>, <code>nama</code>, <code>bidang</code>, dan <code>password</code>.</>,
+            <>Bidang berupa kode 3 digit sesuai sheet <b>Kode Bidang</b>, misalnya <code>237</code>.</>,
+            <>Password minimal 8 karakter. Isi username dan bidang sebagai teks.</>,
+            <>Simpan berkas, lalu unggah dan klik <b>Impor</b>.</>,
+          ]}
+          templateHref="/api/panitia?aksi=template-peserta"
+          onImport={imporBerkas}
+        />
       </div>
     </>
   );
@@ -261,6 +436,16 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
  * ------------------------------------------------------------------ */
 function PengawasTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh: () => void }) {
   const [form, setForm] = useState({ username: '', nama: '', password: '' });
+
+  async function imporBerkas(file: File): Promise<boolean> {
+    setError(null);
+    try {
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-pengawas', berkas: await fileKeBase64(file), namaFile: file.name });
+      setInfo(`${r.jumlah} pengawas berhasil diimpor.`);
+      onRefresh();
+      return true;
+    } catch (e) { setError((e as Error).message); return false; }
+  }
 
   async function simpan() {
     setError(null);
@@ -288,6 +473,18 @@ function PengawasTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefr
         </div>
         <div style={{ marginTop: 10 }}><button className="btn" onClick={simpan}>Simpan</button></div>
       </div>
+      <div className="card">
+        <ImporBox
+          judul="Impor Pengawas (Excel)"
+          petunjuk={[
+            <>Unduh template, lalu isi kolom <code>username</code>, <code>nama</code>, dan <code>password</code>.</>,
+            <>Password minimal 8 karakter. Username harus unik dan tanpa spasi.</>,
+            <>Pengawas tidak terikat bidang studi. Penugasan ruang dilakukan di tab Ujian.</>,
+          ]}
+          templateHref="/api/panitia?aksi=template-pengawas"
+          onImport={imporBerkas}
+        />
+      </div>
     </>
   );
 }
@@ -305,7 +502,6 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
   const [daftar, setDaftar] = useState<{ id: string; kode: string | null; bidang: string; tipe: string; isi: string; status: string; jumlah_opsi: number }[]>([]);
   const [form, setForm] = useState({ id: '', kode: '', bidang: '237', tipe: 'PILIHAN_GANDA', isi: '', rubrik: '', status: 'PUBLISHED' });
   const [opsi, setOpsi] = useState<OpsiForm[]>(KOSONG_OPSI());
-  const [berkasSoal, setBerkasSoal] = useState<File | null>(null);
 
   const muat = useCallback(() => {
     const q = new URLSearchParams({ aksi: 'soal' });
@@ -316,15 +512,14 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
 
   useEffect(() => { muat(); }, [muat]);
 
-  async function imporSoalBerkas() {
-    if (!berkasSoal) return;
+  async function imporSoalBerkas(file: File): Promise<boolean> {
     setError(null);
     try {
-      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-soal', berkas: await fileKeBase64(berkasSoal), namaFile: berkasSoal.name });
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-soal', berkas: await fileKeBase64(file), namaFile: file.name });
       setInfo(`${r.jumlah} soal berhasil diimpor.`);
-      setBerkasSoal(null);
       muat();
-    } catch (e) { setError((e as Error).message); }
+      return true;
+    } catch (e) { setError((e as Error).message); return false; }
   }
 
   async function ubah(id: string) {
@@ -350,15 +545,17 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
   return (
     <>
       <div className="card">
-        <h3>Impor Soal (Excel)</h3>
-        <div className="notice neutral" style={{ fontSize: 13 }}>
-          Unduh template, isi sheet <b>Soal</b>, lalu unggah. Tipe: <code>PILIHAN_GANDA</code> atau <code>ESAI</code>. Gambar ditambahkan setelah impor lewat editor. Satu baris salah membatalkan seluruh impor.
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <a className="btn outline" href="/api/panitia?aksi=template-soal">Unduh Template Excel</a>
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setBerkasSoal(e.target.files?.[0] ?? null)} />
-          <button className="btn" disabled={!berkasSoal} onClick={imporSoalBerkas}>Impor</button>
-        </div>
+        <ImporBox
+          judul="Impor Soal (Excel)"
+          petunjuk={[
+            <>Unduh template, lalu isi sheet <b>Soal</b>. Kolom: <code>kode</code>, <code>bidang</code>, <code>tipe</code>, <code>isi</code>, <code>opsi_a</code> sampai <code>opsi_e</code>, <code>kunci</code>, <code>rubrik</code>, <code>status</code>.</>,
+            <>Tipe berupa <code>PILIHAN_GANDA</code> atau <code>ESAI</code>. Esai wajib memiliki <code>rubrik</code>.</>,
+            <>Kunci berupa huruf A–E. Status <code>DRAFT</code> atau <code>PUBLISHED</code>, kosong berarti <code>PUBLISHED</code>.</>,
+            <>Gambar tidak dapat dimasukkan lewat Excel. Tambahkan setelah impor lewat editor.</>,
+          ]}
+          templateHref="/api/panitia?aksi=template-soal"
+          onImport={imporSoalBerkas}
+        />
       </div>
 
       <div className="card">
@@ -552,6 +749,16 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
       .catch(() => setBankSoal([]));
   }, [form.bidang]);
 
+  async function salin(id: string) {
+    setError(null);
+    try {
+      const r = await aksi<{ id: string }>({ aksi: 'salin-ujian', ujianId: id });
+      setInfo('Ujian disalin sebagai DRAFT. Periksa jadwal dan penugasan sebelum dipublikasikan.');
+      muatDaftar();
+      buka(r.id);
+    } catch (e) { setError((e as Error).message); }
+  }
+
   async function buka(id: string) {
     const d = await baca<Detail>(`aksi=ujian-detail&id=${id}`);
     setDetail(d);
@@ -646,7 +853,10 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
             {daftar.map((u) => (
               <tr key={u.id}>
                 <td>{u.kode}</td><td>{u.judul}</td><td>{u.bidang}</td><td>{u.status}</td><td>{u.peserta}</td><td>{u.sudah_mulai}</td>
-                <td><button className="btn outline" onClick={() => buka(u.id)}>Buka</button></td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn outline" onClick={() => buka(u.id)}>Buka</button>{' '}
+                  <button className="btn outline" onClick={() => salin(u.id)}>Salin</button>
+                </td>
               </tr>
             ))}
             {daftar.length === 0 && <tr><td colSpan={7}>Belum ada ujian.</td></tr>}
@@ -812,13 +1022,14 @@ function NilaiTab({ setError, setInfo }: Omit<Props, 'rujukan'> & { rujukan: Ruj
   }, [ujianId, setError]);
   useEffect(() => { muatHasil(); }, [muatHasil]);
 
-  async function imporNilai(file: File) {
+  async function imporNilai(file: File): Promise<boolean> {
     setError(null);
     try {
       const r = await aksi<{ jumlah: number }>({ aksi: 'impor-esai', ujianId, berkas: await fileKeBase64(file), namaFile: file.name });
       setInfo(`${r.jumlah} nilai esai berhasil diimpor.`);
       muatHasil();
-    } catch (e) { setError((e as Error).message); }
+      return true;
+    } catch (e) { setError((e as Error).message); return false; }
   }
 
   async function publikasi() {
@@ -853,14 +1064,30 @@ function NilaiTab({ setError, setInfo }: Omit<Props, 'rujukan'> & { rujukan: Ruj
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <a className="btn outline" href={`/api/panitia?aksi=ekspor-esai&ujianId=${ujianId}`}>Unduh Esai (CSV)</a>
               <a className="btn outline" href="/api/panitia?aksi=template-esai">Unduh Template Excel</a>
-              <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && imporNilai(e.target.files[0])} />
             </div>
           </div>
 
           <div className="card">
+            <ImporBox
+              judul="Unggah Hasil Koreksi Esai (Excel)"
+              petunjuk={[
+                <>Unduh template, lalu isi kolom <code>pengerjaan_id</code>, <code>soal_id</code>, <code>skor</code> (0–100), dan <code>umpan_balik</code>.</>,
+                <><code>pengerjaan_id</code> dan <code>soal_id</code> disalin dari ekspor esai (CSV).</>,
+                <>Satu baris salah membatalkan seluruh impor.</>,
+              ]}
+              templateHref="/api/panitia?aksi=template-esai"
+              onImport={imporNilai}
+            />
+          </div>
+
+
+          <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <h3 style={{ margin: 0 }}>Hasil</h3>
-              <button className="btn hijau" onClick={publikasi}>Publikasikan Hasil</button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <a className="btn outline" href={`/api/panitia?aksi=ekspor-hasil&ujianId=${ujianId}`}>Unduh Hasil (Excel)</a>
+                <button className="btn hijau" onClick={publikasi}>Publikasikan Hasil</button>
+              </div>
             </div>
             <table className="tabel">
               <thead><tr><th>Nama</th><th>Username</th><th>Status</th><th>PG (benar dari {hasil?.totalPilihanGanda ?? 0})</th><th>Esai (0–100)</th></tr></thead>
@@ -878,5 +1105,214 @@ function NilaiTab({ setError, setInfo }: Omit<Props, 'rujukan'> & { rujukan: Ruj
         </>
       )}
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Berita acara: dikirim setelah ujian selesai, per ruang
+ * ------------------------------------------------------------------ */
+type IsiBeritaAcara = {
+  ujian: { kode: string; judul: string; bidang: string; mulai: string | null; selesai: string | null };
+  ruang: { kode: string; nama: string; kapasitas: number };
+  pengawas: string[];
+  peserta: { nama: string; username: string; status: string; skorPilihanGanda: number | null; pelanggaranFokus: number; totalJedaDetik: number }[];
+  ringkasan: { jumlahPeserta: number; hadir: number; tidakHadir: number; selesai: number; masihAktif: number; totalPelanggaranFokus: number };
+};
+type BeritaRuang = { id: string; kode: string; nama: string; peserta: number; pengawas: string; dikirim_at: string | null };
+const LABEL_STATUS: Record<string, string> = {
+  TIDAK_HADIR: 'Tidak hadir',
+  AKTIF: 'Sedang mengerjakan',
+  SELESAI: 'Selesai',
+  DIHENTIKAN: 'Dihentikan',
+};
+
+function BeritaTab({ setError, setInfo }: { setError: (m: string | null) => void; setInfo: (m: string | null) => void }) {
+  const [ujian, setUjian] = useState<{ id: string; kode: string; judul: string; status: string }[]>([]);
+  const [ujianId, setUjianId] = useState('');
+  const [siap, setSiap] = useState(false);
+  const [ruang, setRuang] = useState<BeritaRuang[]>([]);
+  const [lihat, setLihat] = useState<{ ruangId: string; terkirim: boolean; dikirimAt: string | null; dikirimOleh: string | null; data: IsiBeritaAcara } | null>(null);
+
+  useEffect(() => {
+    baca<typeof ujian>('aksi=ujian').then(setUjian).catch((e: Error) => setError(e.message));
+  }, [setError]);
+
+  const muat = useCallback(() => {
+    if (!ujianId) { setRuang([]); setSiap(false); return; }
+    baca<{ siap: boolean; ruang: BeritaRuang[] }>(`aksi=berita-daftar&ujianId=${ujianId}`)
+      .then((d) => { setSiap(d.siap); setRuang(d.ruang); })
+      .catch((e: Error) => setError(e.message));
+  }, [ujianId, setError]);
+
+  useEffect(() => { setLihat(null); muat(); }, [muat]);
+
+  async function bukaRuang(ruangId: string) {
+    setError(null);
+    try {
+      const d = await baca<Omit<NonNullable<typeof lihat>, 'ruangId'>>(`aksi=berita-acara&ujianId=${ujianId}&ruangId=${ruangId}`);
+      setLihat({ ruangId, ...d });
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  async function kirim(r: BeritaRuang) {
+    if (!window.confirm(`Kirim berita acara ruang ${r.kode}? Setelah dikirim, isinya tidak dapat diubah.`)) return;
+    setError(null);
+    try {
+      await aksi({ aksi: 'kirim-berita-acara', ujianId, ruangId: r.id });
+      setInfo(`Berita acara ruang ${r.kode} berhasil dikirim.`);
+      muat();
+      bukaRuang(r.id);
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  const isi = lihat?.data;
+  const namaRuang = lihat ? ruang.find((x) => x.id === lihat.ruangId)?.kode ?? '' : '';
+
+  return (
+    <>
+      <div className="card">
+        <label style={{ fontSize: 14 }}>Pilih ujian: </label>
+        <select value={ujianId} onChange={(e) => setUjianId(e.target.value)} style={{ padding: 6, minWidth: 280 }}>
+          <option value="">— pilih ujian —</option>
+          {ujian.map((u) => <option key={u.id} value={u.id}>{u.kode} – {u.judul} ({u.status})</option>)}
+        </select>
+        {ujianId && (
+          <div className="info" style={{ fontSize: 13, marginTop: 10 }}>
+            {siap
+              ? 'Ujian sudah selesai. Berita acara dapat dikirim untuk setiap ruang.'
+              : 'Berita acara dapat dikirim setelah waktu ujian berakhir.'}
+          </div>
+        )}
+      </div>
+
+      {ujianId && (
+        <div className="card">
+          <b>Ruang Ujian</b>
+          <div style={{ overflowX: 'auto', marginTop: 8 }}>
+            <table className="tabel">
+              <thead><tr><th>Ruang</th><th>Peserta</th><th>Pengawas</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {ruang.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.kode} – {r.nama}</td>
+                    <td>{r.peserta}</td>
+                    <td>{r.pengawas || '—'}</td>
+                    <td>
+                      {r.dikirim_at ? `Terkirim ${fmtWaktu(r.dikirim_at)}` : siap ? 'Siap dikirim' : 'Menunggu ujian selesai'}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="btn outline" onClick={() => bukaRuang(r.id)}>Lihat</button>{' '}
+                      <button className="btn" disabled={!siap || !!r.dikirim_at || r.peserta === 0} onClick={() => kirim(r)}>Kirim</button>
+                    </td>
+                  </tr>
+                ))}
+                {ruang.length === 0 && <tr><td colSpan={5}>Belum ada ruang yang ditugaskan untuk ujian ini.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {lihat && isi && (
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+            <b>Berita Acara Ruang {namaRuang}</b>
+            <span style={{ fontSize: 13 }}>
+              {lihat.terkirim
+                ? `Terkirim ${fmtWaktu(lihat.dikirimAt as string)} oleh ${lihat.dikirimOleh ?? '-'}`
+                : 'Pratinjau (belum dikirim)'}
+            </span>
+          </div>
+          <div style={{ fontSize: 14, lineHeight: 1.7 }}>
+            <div><b>Ujian:</b> {isi.ujian.kode} – {isi.ujian.judul} ({isi.ujian.bidang})</div>
+            <div><b>Ruang:</b> {isi.ruang.kode} – {isi.ruang.nama} (kapasitas {isi.ruang.kapasitas})</div>
+            <div><b>Jadwal:</b> {isi.ujian.mulai ? fmtWaktu(isi.ujian.mulai) : '—'} s.d. {isi.ujian.selesai ? fmtWaktu(isi.ujian.selesai) : '—'}</div>
+            <div><b>Pengawas:</b> {isi.pengawas.length ? isi.pengawas.join(', ') : '—'}</div>
+            <div>
+              <b>Ringkasan:</b> {isi.ringkasan.jumlahPeserta} peserta terdaftar, {isi.ringkasan.hadir} hadir,
+              {' '}{isi.ringkasan.tidakHadir} tidak hadir, {isi.ringkasan.selesai} selesai,
+              {' '}{isi.ringkasan.masihAktif} masih mengerjakan, {isi.ringkasan.totalPelanggaranFokus} pelanggaran fokus.
+            </div>
+          </div>
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table className="tabel">
+              <thead><tr><th>No</th><th>Nama</th><th>Username</th><th>Status</th><th>PG benar</th><th>Pelanggaran fokus</th><th>Jeda</th></tr></thead>
+              <tbody>
+                {isi.peserta.map((p, i) => (
+                  <tr key={p.username}>
+                    <td>{i + 1}</td>
+                    <td>{p.nama}</td>
+                    <td>{p.username}</td>
+                    <td>{LABEL_STATUS[p.status] ?? p.status}</td>
+                    <td>{p.skorPilihanGanda ?? '—'}</td>
+                    <td>{p.pelanggaranFokus}</td>
+                    <td>{p.totalJedaDetik > 0 ? fmtDetik(p.totalJedaDetik) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!lihat.terkirim && (
+            <div className="info" style={{ fontSize: 13, marginTop: 10 }}>
+              Pratinjau ini belum tersimpan. Setelah dikirim, isi berita acara disimpan apa adanya dan tidak berubah.
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Log aktivitas
+ * ------------------------------------------------------------------ */
+const LABEL_LOG: Record<string, string> = {
+  IMPOR_PESERTA: 'Impor peserta',
+  IMPOR_SOAL: 'Impor soal',
+  IMPOR_PENGAWAS: 'Impor pengawas',
+  IMPOR_RUANG: 'Impor ruang',
+  IMPOR_NILAI_ESAI: 'Impor nilai esai',
+  RESET_PASSWORD_PESERTA: 'Reset password peserta',
+  SALIN_UJIAN: 'Salin ujian',
+  BUAT_ULANG_TOKEN: 'Buat ulang token ruang',
+  PUBLIKASI_HASIL: 'Publikasi hasil',
+  KIRIM_BERITA_ACARA: 'Kirim berita acara',
+};
+
+function LogTab({ setError }: { setError: (m: string | null) => void }) {
+  const [daftar, setDaftar] = useState<{ waktu: string; pelaku: string; aksi: string; target: string | null; detail: unknown }[]>([]);
+
+  const muat = useCallback(() => {
+    baca<typeof daftar>('aksi=log').then(setDaftar).catch((e: Error) => setError(e.message));
+  }, [setError]);
+  useEffect(() => { muat(); }, [muat]);
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <b>Log Aktivitas</b>
+        <button className="btn outline" onClick={muat}>Muat ulang</button>
+      </div>
+      <div className="info" style={{ fontSize: 13, marginBottom: 8 }}>
+        Menampilkan 200 aktivitas terakhir: impor, reset password, salin ujian, publikasi, dan pengiriman berita acara.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="tabel">
+          <thead><tr><th>Waktu</th><th>Pelaku</th><th>Aktivitas</th><th>Target</th><th>Rincian</th></tr></thead>
+          <tbody>
+            {daftar.map((r, i) => (
+              <tr key={i}>
+                <td style={{ whiteSpace: 'nowrap' }}>{fmtWaktu(r.waktu)}</td>
+                <td>{r.pelaku}</td>
+                <td>{LABEL_LOG[r.aksi] ?? r.aksi}</td>
+                <td>{r.target ?? '—'}</td>
+                <td style={{ fontSize: 12 }}>{r.detail ? JSON.stringify(r.detail) : '—'}</td>
+              </tr>
+            ))}
+            {daftar.length === 0 && <tr><td colSpan={5}>Belum ada aktivitas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

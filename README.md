@@ -76,3 +76,15 @@ Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
 - Tab **Ujian** memiliki kartu *Konfigurasi SEB*: tambah konfigurasi (nama, platform, Browser Exam Key), lalu aktifkan atau nonaktifkan.
 - BEK disimpan di server dan tidak pernah dikirim balik ke browser. BEK hanya bisa dimasukkan ulang, bukan dibaca.
 - Hubungkan konfigurasi ke ujian lewat checkbox *Konfigurasi SEB* pada form ujian.
+
+### Revisi terbaru
+- **Login**: panel biru menampilkan foto kampus (`public/login-kampus.jpg`).
+- **Impor Excel** untuk Peserta, Soal, Pengawas, Ruang, dan Nilai Esai. Setiap impor memiliki tombol *Unduh Template Excel* dan petunjuk bernomor. Impor bersifat seluruh-atau-tidak-sama-sekali.
+- **Monitoring Super Admin** (tab *Monitoring*): pilih ujian, lalu klik baris ruang untuk memantau peserta ruang tersebut, lengkap dengan Jeda dan Lanjutkan. Tampilannya sama dengan dashboard pengawas.
+- **Log Aktivitas** (tab baru): 200 aktivitas terakhir, yaitu impor, reset password, salin ujian, publikasi, dan pengiriman berita acara.
+- **Reset password peserta**: tombol di tabel peserta. Password baru dibuat server, hanya ditampilkan sekali, dan sesi peserta lama diakhiri.
+- **Salin ujian**: menyalin judul, bagian dan jadwal, soal, SEB, penugasan ruang dan pengawas, serta membuat token baru per ruang. Hasil peserta tidak disalin. Hasil salinan berstatus DRAFT.
+- **Unduh Hasil (Excel)** di tab Nilai Esai & Hasil.
+- **Berita Acara** (tab baru): per ruang, berisi peserta, status, pelanggaran fokus, dan jeda. Tombol **Kirim** aktif setelah waktu ujian berakhir. Setelah dikirim, isi berita acara disimpan sebagai salinan dan tidak berubah.
+
+**Migrasi database:** untuk database yang sudah berjalan, jalankan `database/002-berita-acara.sql` sekali di Supabase SQL Editor. Database baru cukup dengan `001-schema.sql`.

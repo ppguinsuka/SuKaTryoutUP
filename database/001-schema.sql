@@ -284,4 +284,17 @@ ALTER TABLE impor_nilai         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE nilai_esai          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE log_aktivitas       ENABLE ROW LEVEL SECURITY;
 
+-- ============================================================
+-- Berita acara (dikirim setelah ujian selesai, per ruang)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS berita_acara (
+  ujian_id     uuid NOT NULL REFERENCES ujian(id) ON DELETE CASCADE,
+  ruang_id     uuid NOT NULL REFERENCES ruang_ujian(id),
+  isi          jsonb NOT NULL,
+  dikirim_at   timestamptz NOT NULL DEFAULT now(),
+  dikirim_oleh uuid REFERENCES users(id),
+  PRIMARY KEY (ujian_id, ruang_id)
+);
+ALTER TABLE berita_acara         ENABLE ROW LEVEL SECURITY;
+
 COMMIT;

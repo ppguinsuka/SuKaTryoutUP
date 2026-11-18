@@ -1,6 +1,6 @@
 'use client';
 
-import { BarChart3, ClipboardList, FileQuestion, GraduationCap, LayoutDashboard, LogOut, Menu, MonitorCheck, ShieldCheck, Users, X, type LucideIcon } from 'lucide-react';
+import { Activity, BarChart3, ClipboardList, FileQuestion, FileText, GraduationCap, LayoutDashboard, LogOut, Menu, MonitorCheck, ScrollText, ShieldCheck, Users, X, type LucideIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
 export type NavItem<T extends string> = { id: T; label: string; icon?: LucideIcon };
@@ -25,6 +25,9 @@ export const IKON_PANITIA: Record<string, LucideIcon> = {
   pengawas: MonitorCheck,
   ruang: GraduationCap,
   nilai: BarChart3,
+  berita: FileText,
+  log: ScrollText,
+  monitoring: Activity,
 };
 
 /** Layout panel admin: sidebar kiri, topbar, dan area konten (struktur sama dengan SuKa Olimpiade). */

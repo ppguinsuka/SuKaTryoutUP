@@ -445,8 +445,19 @@ export async function pastikanPengawasRuang(c: PoolClient, pengawasId: string, u
   return r.rows.map((x) => x.ruang_id as string);
 }
 
-export async function pantauRuang(c: PoolClient, pengawas: SessionUser, ujianId: string) {
-  const ruangIds = await pastikanPengawasRuang(c, pengawas.id, ujianId);
+export async function pantauRuang(c: PoolClient, pengawas: SessionUser, ujianId: string, ruangId?: string) {
+  let ruangIds: string[];
+  if (pengawas.role === 'SUPER_ADMIN') {
+    // Super Admin memantau semua ruang pada ujian, atau satu ruang yang dipilih.
+    ruangIds = ruangId
+      ? [ruangId]
+      : (await c.query('SELECT DISTINCT ruang_id FROM penugasan_ruang WHERE ujian_id = $1', [ujianId])).rows.map(
+          (r) => r.ruang_id as string,
+        );
+  } else {
+    const ditugaskan = await pastikanPengawasRuang(c, pengawas.id, ujianId);
+    ruangIds = ruangId ? ditugaskan.filter((x) => x === ruangId) : ditugaskan;
+  }
 
   const peserta = (
     await c.query(
@@ -521,8 +532,10 @@ export async function jedaPengerjaan(
   ).rows[0];
   if (!p) throw new AppError('Pengerjaan tidak ditemukan.', 404);
 
-  const ruangIds = await pastikanPengawasRuang(c, pengawas.id, p.ujian_id);
-  if (!ruangIds.includes(p.ruang_id)) throw new AppError('Peserta ini bukan di ruang yang Anda awasi.', 403);
+  if (pengawas.role !== 'SUPER_ADMIN') {
+    const ruangIds = await pastikanPengawasRuang(c, pengawas.id, p.ujian_id);
+    if (!ruangIds.includes(p.ruang_id)) throw new AppError('Peserta ini bukan di ruang yang Anda awasi.', 403);
+  }
   if (p.status !== 'AKTIF') throw new AppError('Pengerjaan sudah selesai.', 409);
 
   if (aksi === 'jeda') {
