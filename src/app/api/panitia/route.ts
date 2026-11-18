@@ -4,27 +4,7 @@ import { berkasDariBase64, bacaBerkas, buatTemplate, MIME_XLSX } from '@/lib/exc
 import { imporSoal } from '@/lib/impor-soal';
 import { withTx } from '@/lib/db';
 import { AppError, jsonError, jsonOk } from '@/lib/errors';
-import {
-  buatUlangToken,
-  dashboardPanitia,
-  detailSoal,
-  detailUjian,
-  eksporEsai,
-  hasilUjian,
-  imporEsai,
-  imporPeserta,
-  listPeserta,
-  listSoal,
-  listUjian,
-  publikasi,
-  rujukan,
-  simpanPeserta,
-  simpanPengawas,
-  simpanPenugasan,
-  simpanRuang,
-  simpanSoal,
-  simpanUjian,
-} from '@/lib/panitia';
+import { buatUlangToken, dashboardPanitia, detailSoal, detailUjian, eksporEsai, hasilUjian, imporEsai, imporPeserta, listPeserta, listSoal, listUjian, publikasi, rujukan, simpanPeserta, simpanPengawas, simpanPenugasan, simpanRuang, simpanSoal, simpanUjian, simpanSeb, ubahStatusSeb } from '@/lib/panitia';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -102,6 +82,13 @@ export async function POST(req: Request) {
     const data = (body.data ?? {}) as Record<string, unknown>;
 
     switch (body.aksi) {
+      case 'simpan-seb': {
+        const id = await withTx((c) => simpanSeb(c, data));
+        return jsonOk({ id });
+      }
+      case 'ubah-status-seb':
+        await withTx((c) => ubahStatusSeb(c, data));
+        break;
       case 'simpan-ruang':
         await withTx((c) => simpanRuang(c, data));
         break;

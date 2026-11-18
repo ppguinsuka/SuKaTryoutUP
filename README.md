@@ -71,3 +71,8 @@ Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
 - **Gambar disimpan sebagai base64** langsung di dalam konten. Gambar dikecilkan di browser (lebar maks. 1000 px, JPEG) agar ukurannya wajar.
 - Konten dibersihkan di server (`src/lib/sanitize.ts`, allowlist `sanitize-html`): script, event handler, dan tautan selain http(s)/mailto dibuang. Gambar hanya diterima dalam bentuk data URI base64.
 - Dependensi baru: `xlsx`, `sanitize-html`, `@types/sanitize-html`. Jalankan `npm install` setelah mengambil perubahan ini.
+
+### Konfigurasi SEB dari panel Panitia
+- Tab **Ujian** memiliki kartu *Konfigurasi SEB*: tambah konfigurasi (nama, platform, Browser Exam Key), lalu aktifkan atau nonaktifkan.
+- BEK disimpan di server dan tidak pernah dikirim balik ke browser. BEK hanya bisa dimasukkan ulang, bukan dibaca.
+- Hubungkan konfigurasi ke ujian lewat checkbox *Konfigurasi SEB* pada form ujian.

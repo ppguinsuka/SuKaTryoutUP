@@ -87,7 +87,13 @@ export async function rujukan(c: C) {
   return {
     bidang: (await c.query('SELECT kode, nama FROM bidang_studi ORDER BY kode')).rows,
     ruang: (await c.query('SELECT id, kode, nama, kapasitas FROM ruang_ujian ORDER BY kode')).rows,
-    seb: (await c.query('SELECT id, nama, platform, aktif FROM seb_konfigurasi ORDER BY nama')).rows,
+    seb: (
+      await c.query(
+        `SELECT s.id, s.nama, s.platform, s.aktif, COUNT(us.ujian_id)::int AS jumlah_ujian
+           FROM seb_konfigurasi s LEFT JOIN ujian_seb us ON us.konfigurasi_id = s.id
+          GROUP BY s.id ORDER BY s.nama`,
+      )
+    ).rows,
     pengawas: (
       await c.query(`SELECT id, nama, username FROM users WHERE role = 'PENGAWAS' AND status = 'ACTIVE' ORDER BY nama`)
     ).rows,
@@ -685,4 +691,31 @@ export async function hasilPeserta(c: C, userId: string) {
       [userId],
     )
   ).rows;
+}
+
+/**
+ * Konfigurasi SEB. BEK disimpan di server dan tidak pernah dikirim balik ke browser.
+ */
+export async function simpanSeb(c: C, d: Record<string, unknown>): Promise<string> {
+  const nama = teks(d.nama, 'Nama konfigurasi wajib diisi.').slice(0, 100);
+  const platform = String(d.platform ?? '').toUpperCase();
+  if (!['WINDOWS', 'MACOS'].includes(platform)) throw new AppError('Platform harus WINDOWS atau MACOS.', 400);
+  const bek = String(d.bek ?? '').trim();
+  if (bek.length < 16 || bek.length > 200) throw new AppError('Browser Exam Key harus 16–200 karakter.', 400);
+  try {
+    const r = await c.query(
+      'INSERT INTO seb_konfigurasi (nama, platform, bek, aktif) VALUES ($1, $2, $3, true) RETURNING id',
+      [nama, platform, bek],
+    );
+    return r.rows[0].id as string;
+  } catch (e) {
+    if ((e as { code?: string }).code === '23505') throw new AppError('Browser Exam Key ini sudah terdaftar.', 409);
+    throw e;
+  }
+}
+
+export async function ubahStatusSeb(c: C, d: Record<string, unknown>): Promise<void> {
+  const id = uuid(d.id, 'Konfigurasi SEB tidak valid.');
+  const r = await c.query('UPDATE seb_konfigurasi SET aktif = $2 WHERE id = $1', [id, !!d.aktif]);
+  if (!r.rowCount) throw new AppError('Konfigurasi SEB tidak ditemukan.', 404);
 }

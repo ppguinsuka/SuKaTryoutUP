@@ -21,7 +21,7 @@ function fileKeBase64(file: File): Promise<string> {
 type Tab = 'dashboard' | 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
 type Bidang = { kode: string; nama: string };
 type Ruang = { id: string; kode: string; nama: string; kapasitas: number };
-type Seb = { id: string; nama: string; platform: string; aktif: boolean };
+type Seb = { id: string; nama: string; platform: string; aktif: boolean; jumlah_ujian: number };
 type Pengawas = { id: string; nama: string; username: string };
 type Rujukan = { bidang: Bidang[]; ruang: Ruang[]; seb: Seb[]; pengawas: Pengawas[] };
 
@@ -455,6 +455,77 @@ type Detail = {
 
 const KOSONG_UJIAN = { id: '', kode: '', judul: '', bidang: '237', mode_token: 'PER_RUANG', token_sama: '', status: 'DRAFT', seb_wajib: true };
 
+/* ------------------------------------------------------------------ *
+ * Konfigurasi SEB (Browser Exam Key disimpan di server, tidak ditampilkan lagi)
+ * ------------------------------------------------------------------ */
+function SebCard({ seb, onRefresh, setError, setInfo }: { seb: Seb[]; onRefresh: () => void; setError: (m: string | null) => void; setInfo: (m: string | null) => void }) {
+  const [nama, setNama] = useState('');
+  const [platform, setPlatform] = useState('WINDOWS');
+  const [bek, setBek] = useState('');
+  const [simpanBusy, setSimpanBusy] = useState(false);
+
+  async function tambah() {
+    setError(null);
+    setSimpanBusy(true);
+    try {
+      await aksi({ aksi: 'simpan-seb', data: { nama, platform, bek } });
+      setInfo('Konfigurasi SEB ditambahkan.');
+      setNama('');
+      setBek('');
+      onRefresh();
+    } catch (e) { setError((e as Error).message); }
+    finally { setSimpanBusy(false); }
+  }
+
+  async function gantiStatus(item: Seb) {
+    setError(null);
+    try {
+      await aksi({ aksi: 'ubah-status-seb', data: { id: item.id, aktif: !item.aktif } });
+      onRefresh();
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  return (
+    <div className="card">
+      <h3>Konfigurasi SEB</h3>
+      <div className="notice neutral" style={{ fontSize: 13 }}>
+        Masukkan Browser Exam Key (BEK) dari SEB Config Tool. Nilai BEK disimpan di server dan tidak akan ditampilkan lagi. Pastikan file <code>.seb</code> peserta memakai BEK yang sama.
+      </div>
+
+      {seb.length === 0 ? (
+        <div className="notice neutral" style={{ fontSize: 13 }}>Belum ada konfigurasi SEB. Tambahkan di bawah.</div>
+      ) : (
+        <table className="tabel" style={{ marginBottom: 12 }}>
+          <thead>
+            <tr><th>Nama</th><th>Platform</th><th>Dipakai ujian</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody>
+            {seb.map((x) => (
+              <tr key={x.id}>
+                <td>{x.nama}</td>
+                <td>{x.platform}</td>
+                <td>{x.jumlah_ujian}</td>
+                <td>{x.aktif ? 'Aktif' : 'Nonaktif'}</td>
+                <td><button className="btn outline" onClick={() => gantiStatus(x)}>{x.aktif ? 'Nonaktifkan' : 'Aktifkan'}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'minmax(160px,1fr) 140px minmax(200px,2fr) auto', alignItems: 'center' }}>
+        <input placeholder="Nama konfigurasi, misalnya SEB Windows Tryout" value={nama} onChange={(e) => setNama(e.target.value)} />
+        <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
+          <option value="WINDOWS">Windows</option>
+          <option value="MACOS">macOS</option>
+        </select>
+        <input type="password" autoComplete="off" placeholder="Browser Exam Key (BEK)" value={bek} onChange={(e) => setBek(e.target.value)} />
+        <button className="btn" disabled={simpanBusy || !nama.trim() || bek.trim().length < 16} onClick={tambah}>Tambah</button>
+      </div>
+    </div>
+  );
+}
+
 function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh: () => void }) {
   const [daftar, setDaftar] = useState<{ id: string; kode: string; judul: string; status: string; bidang: string; peserta: number; sudah_mulai: number }[]>([]);
   const [form, setForm] = useState(KOSONG_UJIAN);
@@ -563,6 +634,7 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
 
   return (
     <>
+      <SebCard seb={rujukan.seb} onRefresh={onRefresh} setError={setError} setInfo={setInfo} />
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <b>Daftar Ujian</b>
@@ -632,7 +704,7 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
         </div>
 
         <h3 style={{ marginTop: 14, fontSize: 15 }}>Konfigurasi SEB</h3>
-        {rujukan.seb.length === 0 && <div className="info" style={{ fontSize: 13 }}>Belum ada konfigurasi SEB. Tambahkan langsung di SQL Editor (tabel seb_konfigurasi).</div>}
+        {rujukan.seb.length === 0 && <div className="info" style={{ fontSize: 13 }}>Belum ada konfigurasi SEB. Tambahkan di kartu Konfigurasi SEB pada tab ini.</div>}
         {rujukan.seb.map((s) => (
           <label key={s.id} style={{ display: 'flex', gap: 8, fontSize: 14, marginBottom: 4 }}>
             <input type="checkbox" checked={sebIds.includes(s.id)} onChange={(e) => setSebIds(e.target.checked ? [...sebIds, s.id] : sebIds.filter((x) => x !== s.id))} />
