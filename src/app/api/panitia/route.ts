@@ -4,7 +4,7 @@ import { berkasDariBase64, bacaBerkas, buatTemplate, buatXlsx, MIME_XLSX } from 
 import { imporSoal } from '@/lib/impor-soal';
 import { withTx } from '@/lib/db';
 import { AppError, jsonError, jsonOk } from '@/lib/errors';
-import { buatUlangToken, dashboardPanitia, detailSoal, detailUjian, eksporEsai, hasilUjian, imporEsai, imporPeserta, listPeserta, listSoal, listUjian, publikasi, rujukan, simpanPeserta, simpanPengawas, simpanPenugasan, simpanRuang, simpanSoal, simpanUjian, simpanSeb, ubahStatusSeb, imporPengawas, imporRuang, daftarRuangMonitoring, catatLog, listLog, resetPasswordPeserta, salinUjian, daftarBeritaAcara, bacaBeritaAcara, kirimBeritaAcara } from '@/lib/panitia';
+import { buatUlangToken, dashboardPanitia, detailSoal, detailUjian, eksporEsai, hasilUjian, imporEsai, imporPeserta, listPeserta, listSoal, daftarPesertaBerhalaman, daftarSoalBerhalaman, bankSoalBerhalaman, listUjian, publikasi, rujukan, simpanPeserta, simpanPengawas, simpanPenugasan, simpanRuang, simpanSoal, simpanUjian, simpanSeb, ubahStatusSeb, imporPengawas, imporRuang, daftarRuangMonitoring, catatLog, listLog, resetPasswordPeserta, salinUjian, daftarBeritaAcara, bacaBeritaAcara, kirimBeritaAcara } from '@/lib/panitia';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +38,18 @@ export async function GET(req: Request) {
         return jsonOk(await withTx((c) => dashboardPanitia(c)));
       case 'rujukan':
         return jsonOk(await withTx((c) => rujukan(c)));
+      case 'soal-bank-paged':
+        return jsonOk(await withTx((c) => bankSoalBerhalaman(
+          c, String(u.searchParams.get('bidang') || '').slice(0,3), Number(u.searchParams.get('page') || '1'), u.searchParams.get('search') || ''
+        )));
+      case 'peserta-paged':
+        return jsonOk(await withTx((c) => daftarPesertaBerhalaman(
+          c, u.searchParams.get('bidang'), Number(u.searchParams.get('page') || '1'), u.searchParams.get('search') || ''
+        )));
+      case 'soal-paged':
+        return jsonOk(await withTx((c) => daftarSoalBerhalaman(
+          c, u.searchParams.get('bidang'), u.searchParams.get('tipe'), Number(u.searchParams.get('page') || '1'), u.searchParams.get('search') || ''
+        )));
       case 'peserta':
         return jsonOk(await withTx((c) => listPeserta(c, u.searchParams.get('bidang'))));
       case 'soal':
@@ -116,6 +128,33 @@ export async function POST(req: Request) {
     const data = (body.data ?? {}) as Record<string, unknown>;
 
     switch (body.aksi) {
+      case 'pratinjau-impor': {
+        const jenis = String(body.jenis ?? '');
+        const kebutuhan: Record<string, string[]> = {
+          peserta: ['username','nama','bidang','password'],
+          pengawas: ['username','nama','password'],
+          ruang: ['kode','nama','kapasitas'],
+          soal: ['bidang','tipe','isi'],
+          esai: ['pengerjaan_id','soal_id','skor'],
+        };
+        if (!kebutuhan[jenis]) throw new AppError('Jenis impor tidak dikenal.', 400);
+        const rows = bacaBerkas(berkasDariBase64(body.berkas), String(body.namaFile ?? ''));
+        const header = (rows[0] ?? []).map((h) => h.toLowerCase().trim());
+        const kurang = kebutuhan[jenis].filter((h) => !header.includes(h));
+        const data = rows.slice(1);
+        const kosong = data.filter((r) => r.every((v) => !v.trim())).length;
+        const kolomKode = header.indexOf(jenis === 'ruang' || jenis === 'soal' ? 'kode' : jenis === 'esai' ? 'pengerjaan_id' : 'username');
+        const unique = new Set<string>();
+        let duplikat = 0;
+        if (kolomKode >= 0) for (const row of data) {
+          const code = (String(row[kolomKode] ?? '') + (jenis === 'esai' ? ':' + String(row[header.indexOf('soal_id')] ?? '') : '')).trim().toLowerCase();
+          if (!code) continue;
+          if (unique.has(code)) duplikat++;
+          unique.add(code);
+        }
+        // Jangan pernah mengembalikan isi berkas mentah: dapat memuat password peserta.
+        return jsonOk({ baris: data.length, kolom: header, kurang, duplikat, kosong });
+      }
       case 'impor-pengawas': {
         const rows = bacaBerkas(berkasDariBase64(body.berkas), String(body.namaFile ?? ''));
         const n = await withTx(async (c) => {
@@ -135,20 +174,20 @@ export async function POST(req: Request) {
         return jsonOk({ jumlah: n });
       }
       case 'simpan-seb': {
-        const id = await withTx((c) => simpanSeb(c, data));
+        const id = await withTx(async (c) => { const id = await simpanSeb(c, data); await catatLog(c, user.id, 'SIMPAN_SEB', id); return id; });
         return jsonOk({ id });
       }
       case 'ubah-status-seb':
-        await withTx((c) => ubahStatusSeb(c, data));
+        await withTx(async (c) => { await ubahStatusSeb(c, data); await catatLog(c, user.id, 'STATUS_SEB', typeof data.id === 'string' ? data.id : null); });
         break;
       case 'simpan-ruang':
-        await withTx((c) => simpanRuang(c, data));
+        await withTx(async (c) => { await simpanRuang(c, data); await catatLog(c, user.id, 'SIMPAN_RUANG', typeof data.id === 'string' ? data.id : null); });
         break;
       case 'simpan-peserta':
-        await withTx((c) => simpanPeserta(c, data));
+        await withTx(async (c) => { await simpanPeserta(c, data); await catatLog(c, user.id, 'SIMPAN_PESERTA', typeof data.id === 'string' ? data.id : null); });
         break;
       case 'simpan-pengawas':
-        await withTx((c) => simpanPengawas(c, data));
+        await withTx(async (c) => { await simpanPengawas(c, data); await catatLog(c, user.id, 'SIMPAN_PENGAWAS', typeof data.id === 'string' ? data.id : null); });
         break;
       case 'reset-password-peserta': {
         const id = idParam(typeof data.id === 'string' ? data.id : null, 'ID peserta tidak valid.');
@@ -179,11 +218,11 @@ export async function POST(req: Request) {
         return jsonOk({ jumlah: n });
       }
       case 'simpan-soal': {
-        const id = await withTx((c) => simpanSoal(c, data));
+        const id = await withTx(async (c) => { const id = await simpanSoal(c, data); await catatLog(c, user.id, 'SIMPAN_SOAL', id); return id; });
         return jsonOk({ id });
       }
       case 'simpan-ujian': {
-        const id = await withTx((c) => simpanUjian(c, data));
+        const id = await withTx(async (c) => { const id = await simpanUjian(c, data); await catatLog(c, user.id, 'SIMPAN_UJIAN', id); return id; });
         return jsonOk({ id });
       }
       case 'salin-ujian': {
@@ -197,7 +236,7 @@ export async function POST(req: Request) {
       }
       case 'simpan-penugasan': {
         const ujianId = idParam(body.ujianId, 'ID ujian tidak valid.');
-        await withTx((c) => simpanPenugasan(c, ujianId, data));
+        await withTx(async (c) => { await simpanPenugasan(c, ujianId, data); await catatLog(c, user.id, 'SIMPAN_PENUGASAN', ujianId); });
         break;
       }
       case 'buat-ulang-token': {

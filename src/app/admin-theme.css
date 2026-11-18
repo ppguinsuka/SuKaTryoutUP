@@ -301,3 +301,23 @@
 .admin-app .monitor-breadcrumb { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
 .admin-app tr.klik-baris { cursor:pointer; }
 .admin-app tr.klik-baris:hover td { background:#f1f7fe; }
+
+/* Revisi identitas & login: sungai S asli; gambar kampus tetap terlihat. */
+.login-page .login-brand-panel {
+  background: linear-gradient(145deg,rgba(5,39,82,.60),rgba(7,80,142,.47)),
+    url('/login-kampus.jpg') center/cover no-repeat !important;
+}
+.login-page .login-brand-logo .brand-emblem,
+.admin-app .brand-emblem {background:rgba(255,255,255,.94)!important;box-shadow:0 4px 15px rgba(8,54,112,.15);padding:3px}
+.login-page .login-brand-logo .brand-emblem img,.admin-app .brand-emblem img {display:block;width:100%;height:100%;object-fit:contain}
+.admin-app table.tabel tbody tr:hover td {background:#f8fbff}
+.admin-app table.tabel th {position:sticky;top:0;z-index:1}
+.admin-app .table-toolbar {display:flex;gap:9px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:14px}
+.admin-app .table-toolbar input {max-width:330px;flex:1 1 200px}
+.admin-app .table-pages {display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:space-between;margin-top:15px;font-size:.83rem;color:var(--muted)}
+.admin-app .table-pages .btn {min-height:34px;padding:0 11px;font-size:.78rem}
+.admin-app .import-preview-box {border:1px solid #bfdbfe;border-radius:12px;background:#eff6ff;padding:12px;margin-top:10px;font-size:.84rem;line-height:1.6}
+.admin-app .import-preview-box strong {color:#0f4981}
+.admin-app .import-preview-box ul {margin:6px 0;padding-left:20px}
+.admin-app .import-preview-box .warn {color:#92400e}
+@media(max-width:960px){.login-page .login-form-panel {background:linear-gradient(145deg,rgba(255,255,255,.93),rgba(246,251,255,.92)),url('/login-kampus.jpg') center/cover no-repeat}}

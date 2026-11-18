@@ -78,7 +78,11 @@ export function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((c) => c !== ''));
 }
 
-const csvCell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+const csvCell = (v: unknown) => {
+  const value = String(v ?? '');
+  const safe = /^[\s\u0000-\u001f]*[=+@\-]/.test(value) ? '\'' + value : value;
+  return `"${safe.replace(/"/g, '""')}"`;
+};
 
 /* ------------------------------------------------------------------ *
  * Rujukan (daftar pilihan untuk form)
@@ -153,6 +157,24 @@ export async function listPeserta(c: C, bidang: string | null) {
       [bidang],
     )
   ).rows;
+}
+
+/** Halaman kecil di server untuk tabel peserta besar (hingga puluhan ribu). */
+export async function daftarPesertaBerhalaman(c: C, bidang: string | null, halaman: number, cari: string) {
+  const page = Math.max(1, Math.min(99999, Math.trunc(halaman) || 1));
+  const limit = 25;
+  const term = cari.trim().slice(0,100);
+  const q = `%${term.replace(/[\%_]/g, '\\$&')}%`;
+  const [records, count] = await Promise.all([
+    c.query(`SELECT id, username, nama, status, bidang_studi_kode AS bidang FROM users
+       WHERE role='PESERTA' AND ($1::text IS NULL OR bidang_studi_kode=$1)
+         AND (nama ILIKE $2 OR username ILIKE $2)
+       ORDER BY nama,id LIMIT $3 OFFSET $4`, [bidang, q, limit, (page-1)*limit]),
+    c.query(`SELECT count(*)::int AS total FROM users WHERE role='PESERTA'
+       AND ($1::text IS NULL OR bidang_studi_kode=$1)
+       AND (nama ILIKE $2 OR username ILIKE $2)`, [bidang, q]),
+  ]);
+  return { items: records.rows, total: Number(count.rows[0].total), page, pageSize: limit };
 }
 
 export async function simpanPeserta(c: C, d: Record<string, unknown>) {
@@ -232,6 +254,39 @@ export async function listSoal(c: C, bidang: string | null, tipe: string | null)
   ).rows;
 }
 
+/** Halaman soal diambil hanya saat tab Soal dibuka. */
+export async function daftarSoalBerhalaman(c: C, bidang: string | null, tipe: string | null, halaman: number, cari: string) {
+  const page = Math.max(1, Math.min(99999, Math.trunc(halaman) || 1));
+  const limit = 25;
+  const term = cari.trim().slice(0,100);
+  const q = `%${term}%`;
+  const args = [bidang, tipe, q, limit, (page-1)*limit];
+  const where = `($1::text IS NULL OR s.bidang_studi_kode=$1)
+    AND ($2::text IS NULL OR s.tipe=$2)
+    AND (coalesce(s.kode,'') ILIKE $3 OR s.isi ILIKE $3)`;
+  const [records, count] = await Promise.all([
+    c.query(`SELECT s.id, s.kode, s.bidang_studi_kode AS bidang, s.tipe,
+      left(s.isi, 650) AS isi, s.status,
+      (SELECT count(*)::int FROM soal_opsi o WHERE o.soal_id=s.id) AS jumlah_opsi
+      FROM soal s WHERE ${where} ORDER BY s.created_at DESC,s.id LIMIT $4 OFFSET $5`, args),
+    c.query(`SELECT count(*)::int AS total FROM soal s WHERE ${where}`, args.slice(0,3)),
+  ]);
+  return { items: records.rows, total: Number(count.rows[0].total), page, pageSize: limit };
+}
+
+/** Ringkasan bank soal hanya 50 soal per permintaan untuk editor ujian. */
+export async function bankSoalBerhalaman(c: C, bidang: string, halaman: number, cari: string) {
+  const page = Math.max(1, Math.min(99999, Math.trunc(halaman) || 1));
+  const term = cari.trim().slice(0,100);
+  const q = `%${term}%`;
+  const limit = 50;
+  const where = `status='PUBLISHED' AND bidang_studi_kode=$1 AND (coalesce(kode,'') ILIKE $2 OR isi ILIKE $2)`;
+  const list = await c.query(`SELECT id,kode,tipe,left(isi,400) AS isi,status FROM soal WHERE ${where}
+    ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, [bidang,q,limit,(page-1)*limit]);
+  const count = await c.query(`SELECT count(*)::int AS total FROM soal WHERE ${where}`, [bidang,q]);
+  return {items:list.rows,total:Number(count.rows[0].total),page,pageSize:limit};
+}
+
 export async function detailSoal(c: C, id: string) {
   const soal = (await c.query('SELECT * FROM soal WHERE id = $1', [id])).rows[0];
   if (!soal) throw new AppError('Soal tidak ditemukan.', 404);
@@ -276,10 +331,11 @@ export async function simpanSoal(c: C, d: Record<string, unknown>): Promise<stri
     id = uuid(d.id, 'ID soal tidak valid.');
     const terpakai = await c.query(
       `SELECT 1 FROM ujian_soal us JOIN ujian u ON u.id = us.ujian_id
-        WHERE us.soal_id = $1 AND u.status IN ('AKTIF', 'SELESAI') LIMIT 1`,
+        WHERE us.soal_id = $1 AND (u.status IN ('AKTIF', 'SELESAI', 'DIPUBLIKASIKAN', 'ARSIP')
+          OR EXISTS (SELECT 1 FROM pengerjaan p WHERE p.ujian_id = us.ujian_id)) LIMIT 1`,
       [id],
     );
-    if (terpakai.rowCount) throw new AppError('Soal sudah dipakai ujian yang berjalan atau selesai, tidak dapat diubah.', 409);
+    if (terpakai.rowCount) throw new AppError('Soal terkunci karena telah dipakai ujian atau peserta sudah mulai mengerjakan.', 409);
     await c.query(
       `UPDATE soal SET kode = $2, bidang_studi_kode = $3, tipe = $4, isi = $5, rubrik = $6, skor_maks = $7, status = $8
         WHERE id = $1`,
@@ -396,8 +452,15 @@ export async function simpanUjian(c: C, d: Record<string, unknown>): Promise<str
     return { tipe, durasi, mulai, selesai };
   });
 
+  if (bagian[0].selesai > bagian[1].mulai) throw new AppError('Jadwal esai harus dimulai setelah pilihan ganda selesai.', 400);
   const soalIds: string[] = Array.isArray(d.soalIds) ? (d.soalIds as string[]) : [];
+  if (new Set(soalIds).size !== soalIds.length) throw new AppError('Soal yang sama tidak boleh dipilih dua kali.', 400);
   const sebIds: string[] = Array.isArray(d.sebIds) ? (d.sebIds as string[]) : [];
+  if (sebWajib && status !== 'DRAFT' && !sebIds.length) throw new AppError('Ujian wajib SEB harus memiliki konfigurasi BEK aktif.', 400);
+  if (sebWajib && status !== 'DRAFT' && sebIds.length) {
+    const valid = await c.query('SELECT count(*)::int AS n FROM seb_konfigurasi WHERE aktif AND id = ANY($1::uuid[])', [sebIds]);
+    if (valid.rows[0].n !== sebIds.length) throw new AppError('Ada konfigurasi SEB yang nonaktif atau tidak valid.', 400);
+  }
 
   let id: string;
   if (typeof d.id === 'string' && d.id) {
@@ -430,6 +493,12 @@ export async function simpanUjian(c: C, d: Record<string, unknown>): Promise<str
     );
   }
 
+  if (status !== 'DRAFT') {
+    const pilihan = await c.query("SELECT tipe, count(*)::int AS n FROM soal WHERE id=ANY($1::uuid[]) AND bidang_studi_kode=$2 AND status='PUBLISHED' GROUP BY tipe", [soalIds, bidang]);
+    const nPG = Number(pilihan.rows.find((r) => r.tipe === 'PILIHAN_GANDA')?.n ?? 0);
+    const nEsai = Number(pilihan.rows.find((r) => r.tipe === 'ESAI')?.n ?? 0);
+    if (nPG < 1 || nEsai < 1 || nPG + nEsai !== soalIds.length) throw new AppError('Aktivasi memerlukan minimal satu soal pilihan ganda dan satu soal esai yang diterbitkan.', 400);
+  }
   // Soal: hanya soal PUBLISHED dengan Bidang Studi yang sama dengan ujian.
   await c.query('DELETE FROM ujian_soal WHERE ujian_id = $1', [id]);
   for (let i = 0; i < soalIds.length; i++) {
@@ -466,21 +535,29 @@ export async function simpanPenugasan(c: C, ujianId: string, d: Record<string, u
   const peserta = (Array.isArray(d.peserta) ? d.peserta : []) as { userId: string; ruangId: string }[];
   const pengawas = (Array.isArray(d.pengawas) ? d.pengawas : []) as { ruangId: string; pengawasId: string }[];
 
+  // Semua peserta divalidasi dalam satu query agar pengaturan 2.000 peserta tidak
+  // menghasilkan ribuan round-trip DB.
   const jumlahPerRuang = new Map<string, number>();
   const userSudahDitugaskan = new Set<string>();
   for (const p of peserta) {
     const ruangInfo = kapRuang.get(p.ruangId);
     if (!ruangInfo) throw new AppError('Ruang tidak ditemukan.', 400);
-    if (userSudahDitugaskan.has(p.userId)) throw new AppError('Satu peserta hanya boleh di satu ruang.', 400);
-    userSudahDitugaskan.add(p.userId);
-    const cek = await c.query(
-      `SELECT 1 FROM users WHERE id = $1 AND role = 'PESERTA' AND bidang_studi_kode = $2`,
-      [p.userId, ujian.bidang_studi_kode],
-    );
-    if (!cek.rowCount) throw new AppError('Peserta tidak sesuai Bidang Studi ujian.', 400);
+    const idPeserta = uuid(p.userId, 'ID peserta tidak valid.');
+    if (userSudahDitugaskan.has(idPeserta)) throw new AppError('Satu peserta hanya boleh di satu ruang.', 400);
+    userSudahDitugaskan.add(idPeserta);
     const n = (jumlahPerRuang.get(p.ruangId) ?? 0) + 1;
     jumlahPerRuang.set(p.ruangId, n);
     if (n > ruangInfo.kapasitas) throw new AppError(`Kapasitas ruang ${ruangInfo.kode} terlampaui.`, 409);
+  }
+  if (userSudahDitugaskan.size) {
+    const res = await c.query(
+      `SELECT count(*)::int AS n FROM users
+        WHERE id = ANY($1::uuid[]) AND role = 'PESERTA' AND status = 'ACTIVE'
+          AND bidang_studi_kode = $2`,
+      [[...userSudahDitugaskan], ujian.bidang_studi_kode]
+    );
+    if (Number(res.rows[0]?.n) !== userSudahDitugaskan.size)
+      throw new AppError('Terdapat peserta tidak aktif atau tidak sesuai Bidang Studi ujian.', 400);
   }
   for (const p of pengawas) {
     if (!kapRuang.has(p.ruangId)) throw new AppError('Ruang tidak ditemukan.', 400);
@@ -489,8 +566,14 @@ export async function simpanPenugasan(c: C, ujianId: string, d: Record<string, u
   }
 
   await c.query('DELETE FROM penugasan_ruang WHERE ujian_id = $1', [ujianId]);
-  for (const p of peserta) {
-    await c.query('INSERT INTO penugasan_ruang (ujian_id, user_id, ruang_id) VALUES ($1, $2, $3)', [ujianId, p.userId, p.ruangId]);
+  // INSERT batched, tidak satu INSERT per peserta. Tetap dalam satu transaksi.
+  for (let i = 0; i < peserta.length; i += 300) {
+    const batch = peserta.slice(i, i + 300);
+    await c.query(
+      `INSERT INTO penugasan_ruang (ujian_id, user_id, ruang_id)
+       SELECT $1, x.uid, x.rid FROM unnest($2::uuid[], $3::uuid[]) AS x(uid, rid)`,
+      [ujianId, batch.map((x) => x.userId), batch.map((x) => x.ruangId)]
+    );
   }
 
   await c.query('DELETE FROM penugasan_pengawas WHERE ujian_id = $1', [ujianId]);
@@ -503,15 +586,21 @@ export async function simpanPenugasan(c: C, ujianId: string, d: Record<string, u
   }
 
   // Token: hanya untuk ruang yang dipakai, dan hanya jika mode PER_RUANG.
-  await c.query('DELETE FROM ujian_ruang_token WHERE ujian_id = $1', [ujianId]);
   if (ujian.mode_token === 'PER_RUANG') {
     for (const ruangId of jumlahPerRuang.keys()) {
-      await c.query('INSERT INTO ujian_ruang_token (ujian_id, ruang_id, token) VALUES ($1, $2, $3)', [
-        ujianId,
-        ruangId,
-        buatToken(),
-      ]);
+      await c.query(
+        `INSERT INTO ujian_ruang_token (ujian_id, ruang_id, token) VALUES ($1,$2,$3)
+         ON CONFLICT (ujian_id, ruang_id) DO NOTHING`,
+        [ujianId, ruangId, buatToken()]
+      );
     }
+    // Hanya buang token ruang yang tidak lagi memiliki penugasan.
+    await c.query(
+      `DELETE FROM ujian_ruang_token WHERE ujian_id=$1
+         AND NOT (ruang_id = ANY($2::uuid[]))`, [ujianId, [...jumlahPerRuang.keys()]]
+    );
+  } else {
+    await c.query('DELETE FROM ujian_ruang_token WHERE ujian_id=$1', [ujianId]);
   }
 }
 
@@ -700,8 +789,8 @@ export async function simpanSeb(c: C, d: Record<string, unknown>): Promise<strin
   const nama = teks(d.nama, 'Nama konfigurasi wajib diisi.').slice(0, 100);
   const platform = String(d.platform ?? '').toUpperCase();
   if (!['WINDOWS', 'MACOS'].includes(platform)) throw new AppError('Platform harus WINDOWS atau MACOS.', 400);
-  const bek = String(d.bek ?? '').trim();
-  if (bek.length < 16 || bek.length > 200) throw new AppError('Browser Exam Key harus 16–200 karakter.', 400);
+  const bek = String(d.bek ?? '').trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(bek)) throw new AppError('BEK harus tepat 64 karakter heksadesimal (SHA-256) dari konfigurasi SEB final.', 400);
   try {
     const r = await c.query(
       'INSERT INTO seb_konfigurasi (nama, platform, bek, aktif) VALUES ($1, $2, $3, true) RETURNING id',

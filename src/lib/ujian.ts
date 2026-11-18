@@ -105,7 +105,7 @@ export async function sinkronkanPengerjaan(c: PoolClient, pengerjaanId: string) 
     `UPDATE pengerjaan_bagian pb
         SET status = 'SELESAI', selesai = LEAST(pb.batas, ub.selesai)
        FROM pengerjaan p, ujian_bagian ub
-      WHERE pb.pengerjaan_id = $1 AND pb.status = 'SEDANG'
+      WHERE pb.pengerjaan_id = $1 AND pb.status = 'SEDANG_DIKERJAKAN'
         AND p.id = pb.pengerjaan_id
         AND ub.ujian_id = p.ujian_id AND ub.tipe = pb.tipe
         AND LEAST(pb.batas, ub.selesai) < now()`,
@@ -217,17 +217,23 @@ export async function simpanJawaban(
   soalId: string,
   tipe: Tipe,
   nilaiMentah: unknown,
+  versiMentah?: unknown,
 ) {
   const p = await assertMilikPeserta(c, pengerjaanId, user.id);
   if (p.status !== 'AKTIF') throw new AppError('Pengerjaan sudah selesai.', 409);
 
   const bagian = (
     await c.query(
-      `SELECT status FROM pengerjaan_bagian WHERE pengerjaan_id = $1 AND tipe = $2 FOR UPDATE`,
+      `SELECT pb.status, pb.batas, ub.selesai, now() AS waktu_server
+         FROM pengerjaan_bagian pb
+         JOIN pengerjaan p ON p.id = pb.pengerjaan_id
+         JOIN ujian_bagian ub ON ub.ujian_id = p.ujian_id AND ub.tipe = pb.tipe
+        WHERE pb.pengerjaan_id = $1 AND pb.tipe = $2 FOR UPDATE OF pb`,
       [pengerjaanId, tipe],
     )
   ).rows[0];
-  if (bagian?.status !== 'SEDANG_DIKERJAKAN') {
+  if (bagian?.status !== 'SEDANG_DIKERJAKAN' ||
+      !bagian.batas || new Date(bagian.waktu_server).getTime() >= Math.min(new Date(bagian.batas).getTime(), new Date(bagian.selesai).getTime())) {
     throw new AppError('Waktu bagian ini sudah habis atau belum dimulai.', 409);
   }
   const jeda = (await c.query(`SELECT dijeda_sejak FROM pengerjaan WHERE id = $1`, [pengerjaanId])).rows[0];
@@ -250,25 +256,70 @@ export async function simpanJawaban(
     throw new AppError(`Jawaban esai maksimal ${MAKS_ESAI} karakter.`, 400);
   }
 
-  if (nilai === '') {
-    await c.query(`DELETE FROM jawaban WHERE pengerjaan_id = $1 AND soal_id = $2`, [pengerjaanId, soalId]);
-  } else {
-    await c.query(
-      `INSERT INTO jawaban (pengerjaan_id, soal_id, tipe, nilai, disimpan_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (pengerjaan_id, soal_id)
-       DO UPDATE SET nilai = EXCLUDED.nilai, disimpan_at = now()`,
-      [pengerjaanId, soalId, tipe, nilai],
-    );
-  }
+  // Revisi monoton dari klien memastikan request lebih lama tidak mengalahkan yang baru.
+  // Kolom client_revision ditambahkan oleh migrasi 003.
+  const revision = Number(versiMentah);
+  const versi = Number.isSafeInteger(revision) && revision > 0 ? revision : Date.now();
+  const stored = await c.query(
+    `INSERT INTO jawaban (pengerjaan_id, soal_id, tipe, nilai, disimpan_at, client_revision)
+     VALUES ($1, $2, $3, $4, now(), $5)
+     ON CONFLICT (pengerjaan_id, soal_id)
+     DO UPDATE SET nilai = EXCLUDED.nilai, disimpan_at = now(), client_revision = EXCLUDED.client_revision
+       WHERE jawaban.client_revision <= EXCLUDED.client_revision
+     RETURNING client_revision`,
+    [pengerjaanId, soalId, tipe, nilai, versi],
+  );
+  const versiServer = Number(stored.rows[0]?.client_revision ??
+    (await c.query('SELECT client_revision FROM jawaban WHERE pengerjaan_id=$1 AND soal_id=$2', [pengerjaanId, soalId])).rows[0]?.client_revision ?? 0);
+  if (versiServer !== versi) return { versiServer, tersimpan: false };
+
 
   // Hitungan untuk dashboard monitoring: diperbarui di tempat, tanpa membaca ulang seluruh jawaban.
   await c.query(
     `UPDATE pengerjaan_bagian
-        SET jumlah_tersimpan = (SELECT count(*)::int FROM jawaban WHERE pengerjaan_id = $1 AND tipe = $2),
+        SET jumlah_tersimpan = (SELECT count(*)::int FROM jawaban WHERE pengerjaan_id = $1 AND tipe = $2 AND nilai <> ''),
             revisi = revisi + 1
       WHERE pengerjaan_id = $1 AND tipe = $2`,
     [pengerjaanId, tipe],
+  );
+  return { versiServer, tersimpan: true };
+}
+
+/** Status ragu disimpan terpisah dari jawaban agar soal kosong tetap bisa ditandai. */
+export async function tandaiRagu(c: PoolClient, user: SessionUser, pengerjaanId: string, soalId: string, tipe: Tipe, nilai: boolean) {
+  const p = await assertMilikPeserta(c, pengerjaanId, user.id);
+  if (p.status !== 'AKTIF') throw new AppError('Ujian sudah selesai.', 409);
+  const bagian = (await c.query(
+    `SELECT pb.status, pb.batas, ub.selesai FROM pengerjaan_bagian pb
+       JOIN pengerjaan pr ON pr.id=pb.pengerjaan_id
+       JOIN ujian_bagian ub ON ub.ujian_id=pr.ujian_id AND ub.tipe=pb.tipe
+      WHERE pb.pengerjaan_id=$1 AND pb.tipe=$2 FOR UPDATE OF pb`, [pengerjaanId, tipe]
+  )).rows[0];
+  if (bagian?.status !== 'SEDANG_DIKERJAKAN' || !bagian.batas ||
+      (await c.query('SELECT now() >= LEAST($1::timestamptz,$2::timestamptz) AS lewat', [bagian.batas, bagian.selesai])).rows[0].lewat) {
+    throw new AppError('Bagian sudah berakhir.', 409);
+  }
+  const valid = await c.query(
+    `SELECT 1 FROM ujian_soal us JOIN soal s ON s.id=us.soal_id
+      WHERE us.ujian_id=$1 AND us.soal_id=$2 AND s.tipe=$3`, [p.ujian_id, soalId, tipe]
+  );
+  if (!valid.rowCount) throw new AppError('Soal tidak sesuai ujian.', 400);
+  if (nilai) await c.query(
+    `INSERT INTO jawaban_ragu (pengerjaan_id,soal_id,ragu) VALUES($1,$2,true)
+     ON CONFLICT (pengerjaan_id,soal_id) DO UPDATE SET ragu=true, diperbarui_at=now()`, [pengerjaanId, soalId]
+  );
+  else await c.query('DELETE FROM jawaban_ragu WHERE pengerjaan_id=$1 AND soal_id=$2', [pengerjaanId, soalId]);
+}
+
+/** Indikasi perpindahan halaman untuk monitoring (bukan bukti kecurangan). */
+export async function catatFokus(c: PoolClient, user: SessionUser, pengerjaanId: string) {
+  const p = await assertMilikPeserta(c, pengerjaanId, user.id);
+  if (p.status !== 'AKTIF') return;
+  // Pembatasan 10 detik antar event. Hanya indikasi, jangan otomatis memberi sanksi.
+  await c.query(
+    `UPDATE pengerjaan SET pelanggaran_fokus=pelanggaran_fokus+1, fokus_terakhir=now()
+      WHERE id=$1 AND status='AKTIF' AND (fokus_terakhir IS NULL OR fokus_terakhir<now()-interval '10 seconds')`,
+    [pengerjaanId]
   );
 }
 
@@ -278,13 +329,14 @@ export async function selesaikanBagian(c: PoolClient, user: SessionUser, pengerj
 
   const bagian = (
     await c.query(
-      `SELECT pb.status, p.dijeda_sejak FROM pengerjaan_bagian pb
+      `SELECT pb.status, pb.batas, ub.selesai, now() AS waktu_server, p.dijeda_sejak FROM pengerjaan_bagian pb
          JOIN pengerjaan p ON p.id = pb.pengerjaan_id
+         JOIN ujian_bagian ub ON ub.ujian_id = p.ujian_id AND ub.tipe = pb.tipe
         WHERE pb.pengerjaan_id = $1 AND pb.tipe = $2 FOR UPDATE OF pb`,
       [pengerjaanId, tipe],
     )
   ).rows[0];
-  if (bagian?.status !== 'SEDANG_DIKERJAKAN') throw new AppError('Bagian ini tidak sedang dikerjakan.', 409);
+  if (bagian?.status !== 'SEDANG_DIKERJAKAN' || !bagian.batas || new Date(bagian.waktu_server) >= new Date(bagian.batas) || new Date(bagian.waktu_server) >= new Date(bagian.selesai)) throw new AppError('Bagian sudah berakhir sesuai batas waktu server.', 409);
   if (bagian.dijeda_sejak) throw new AppError('Pengerjaan sedang dijeda oleh Pengawas.', 409);
 
   await c.query(
@@ -349,8 +401,10 @@ export async function tampilanSoal(
       [p.ujian_id, tipe],
     )
   ).rows;
+  const raguRows = await c.query('SELECT soal_id FROM jawaban_ragu WHERE pengerjaan_id=$1 AND ragu=true', [pengerjaanId]);
+  const raguIds = new Set(raguRows.rows.map((r) => r.soal_id as string));
   const terjawab = new Set(
-    (await c.query(`SELECT soal_id FROM jawaban WHERE pengerjaan_id = $1 AND tipe = $2`, [pengerjaanId, tipe]))
+    (await c.query(`SELECT soal_id FROM jawaban WHERE pengerjaan_id = $1 AND tipe = $2 AND nilai <> ''`, [pengerjaanId, tipe]))
       .rows.map((r) => r.soal_id as string),
   );
 
@@ -362,11 +416,12 @@ export async function tampilanSoal(
     tipe === 'PILIHAN_GANDA'
       ? (await c.query(`SELECT label, teks FROM soal_opsi WHERE soal_id = $1 ORDER BY label`, [item.soal_id])).rows
       : null;
-  const nilai =
-    (await c.query(`SELECT nilai FROM jawaban WHERE pengerjaan_id = $1 AND soal_id = $2`, [
+  const jawabanTersimpan =
+    (await c.query(`SELECT nilai, client_revision, disimpan_at FROM jawaban WHERE pengerjaan_id = $1 AND soal_id = $2`, [
       pengerjaanId,
       item.soal_id,
-    ])).rows[0]?.nilai ?? '';
+    ])).rows[0];
+  const nilai = jawabanTersimpan?.nilai ?? '';
 
   return {
     pengerjaan: { id: p.id, status: p.status },
@@ -376,7 +431,7 @@ export async function tampilanSoal(
       jumlahTersimpan: b.jumlah_tersimpan,
       sisaDetik: b.sisa_detik,
     })),
-    nomor: daftar.map((d, i) => ({ n: i + 1, soalId: d.soal_id, terjawab: terjawab.has(d.soal_id) })),
+    nomor: daftar.map((d, i) => ({ n: i + 1, soalId: d.soal_id, terjawab: terjawab.has(d.soal_id), ragu: raguIds.has(d.soal_id) })),
     soal: {
       n: nomor,
       id: soal.id,
@@ -384,6 +439,8 @@ export async function tampilanSoal(
       isi: soal.isi,
       opsi,
       nilai,
+      versiServer: Number(jawabanTersimpan?.client_revision ?? 0),
+      disimpanAt: jawabanTersimpan?.disimpan_at ?? null,
     },
   };
 }

@@ -2,7 +2,7 @@ import { requireRole } from '@/lib/auth';
 import { pool, withTx } from '@/lib/db';
 import { AppError, jsonError, jsonOk } from '@/lib/errors';
 import { assertSebForExam } from '@/lib/seb';
-import { mulaiBagian, parseTipe, selesaikanBagian, simpanJawaban } from '@/lib/ujian';
+import { mulaiBagian, parseTipe, selesaikanBagian, simpanJawaban, tandaiRagu, catatFokus } from '@/lib/ujian';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,7 +23,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await assertSebForExam(req, r.rows[0].ujian_id);
 
     const body = await req.json().catch(() => ({}));
-    const tipe = parseTipe(body.tipe);
+    const tipe = body.aksi === 'fokus' ? 'PILIHAN_GANDA' : parseTipe(body.tipe);
+    let hasil: unknown = null;
 
     switch (body.aksi) {
       case 'mulai':
@@ -31,15 +32,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         break;
       case 'simpan':
         if (typeof body.soalId !== 'string') throw new AppError('Soal tidak valid.', 400);
-        await withTx((c) => simpanJawaban(c, user, id, body.soalId, tipe, body.nilai));
+        hasil = await withTx((c) => simpanJawaban(c, user, id, body.soalId, tipe, body.nilai, body.versi));
         break;
       case 'selesai':
         await withTx((c) => selesaikanBagian(c, user, id, tipe));
         break;
+      case 'ragu':
+        if (typeof body.soalId !== 'string') throw new AppError('Soal tidak valid.', 400);
+        await withTx((c) => tandaiRagu(c, user, id, body.soalId, tipe, body.ragu === true));
+        break;
+      case 'fokus':
+        await withTx((c) => catatFokus(c, user, id));
+        break;
       default:
         throw new AppError('Aksi tidak dikenal.', 400);
     }
-    return jsonOk(null);
+    return jsonOk(hasil);
   } catch (err) {
     return jsonError(err);
   }

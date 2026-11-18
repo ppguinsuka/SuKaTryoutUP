@@ -39,9 +39,9 @@ export default function MulaiUjianPage({ params }: { params: Promise<{ id: strin
     <>
       <div className="topbar">
         <div className="brand">
-          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" />
+          <img src="/suka-sungai.png" alt="Logo SuKa Tryout" />
           <div>
-            SuKaTryoutUP
+            SuKa Tryout
             <div className="sub">Pernyataan Ujian</div>
           </div>
         </div>

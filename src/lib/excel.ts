@@ -3,20 +3,31 @@ import { AppError } from './errors';
 import { parseCsv } from './panitia';
 
 export type Baris = string[][];
+export const MAX_IMPORT_BYTES = 2_500_000;
+export const MAX_IMPORT_ROWS = 2500;
 export const MIME_XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 /** Mengubah data base64 dari browser menjadi buffer. */
 export function berkasDariBase64(v: unknown): Buffer {
   if (typeof v !== 'string' || !v) throw new AppError('Berkas impor kosong.', 400);
-  return Buffer.from(v, 'base64');
+  if (v.length > Math.ceil(MAX_IMPORT_BYTES * 4 / 3) + 100) throw new AppError('Berkas terlalu besar. Maksimal 2,5 MB. Bagi data ke beberapa berkas.', 413);
+  const data = Buffer.from(v, 'base64');
+  if (!data.length || data.length > MAX_IMPORT_BYTES) throw new AppError('Ukuran berkas tidak valid. Maksimal 2,5 MB.', 413);
+  return data;
 }
 
 /** Membaca berkas .xlsx (lembar pertama) atau .csv menjadi baris teks. Baris kosong dibuang. */
 export function bacaBerkas(buf: Buffer, namaFile: string): Baris {
   const nama = namaFile.toLowerCase();
   let rows: Baris;
+  if (buf.length > MAX_IMPORT_BYTES) throw new AppError('Berkas impor maksimal 2,5 MB.', 413);
   if (nama.endsWith('.xlsx') || nama.endsWith('.xls')) {
-    const wb = XLSX.read(buf, { type: 'buffer' });
+    const xlsxSignature = buf[0] === 0x50 && buf[1] === 0x4b;
+    const xlsSignature = buf[0] === 0xd0 && buf[1] === 0xcf;
+    if (!((nama.endsWith('.xlsx') && xlsxSignature) || (nama.endsWith('.xls') && xlsSignature))) {
+      throw new AppError('Format file dan isinya tidak cocok. Gunakan template asli.', 400);
+    }
+    const wb = XLSX.read(buf, { type: 'buffer', sheetRows: MAX_IMPORT_ROWS + 2, cellFormula: false, cellHTML: false, cellStyles: false, cellNF: false, bookVBA: false });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     if (!sheet) throw new AppError('File Excel tidak berisi lembar kerja.', 400);
     rows = XLSX.utils
@@ -27,7 +38,12 @@ export function bacaBerkas(buf: Buffer, namaFile: string): Baris {
   } else {
     throw new AppError('Format berkas harus .xlsx atau .csv. Gunakan template yang disediakan.', 400);
   }
-  return rows.filter((r) => r.some((c) => c !== ''));
+  rows = rows.filter((r) => r.some((c) => c !== ''));
+  if (rows.length > MAX_IMPORT_ROWS + 1) throw new AppError(`Maksimal ${MAX_IMPORT_ROWS} baris per berkas. Bagi file menjadi beberapa bagian.`, 413);
+  if (rows.some((r) => r.length > 35 || r.some((c) => String(c).length > 50000))) {
+    throw new AppError('Berkas memiliki terlalu banyak kolom atau sel terlalu panjang.', 400);
+  }
+  return rows;
 }
 
 /** Membuat berkas template Excel untuk impor. */

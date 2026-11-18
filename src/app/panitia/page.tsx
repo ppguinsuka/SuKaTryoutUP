@@ -11,6 +11,7 @@ import '../admin-theme.css';
 
 /** Membaca berkas sebagai base64 (tanpa prefix data URL) agar bisa dikirim sebagai JSON. */
 function fileKeBase64(file: File): Promise<string> {
+  if (file.size > 2_500_000) return Promise.reject(new Error('Berkas maksimal 2,5 MB. Bagi data menjadi beberapa berkas.'));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
@@ -91,7 +92,7 @@ export default function PanitiaPage() {
 
   return (
     <AdminShell
-      title="SuKaTryoutUP"
+      title="SuKa Tryout"
       subtitle="Panel Panitia"
       userName={namaPengguna || undefined}
       nav={tabNav}
@@ -213,6 +214,18 @@ function ImporBox({
   const [berkas, setBerkas] = useState<File | null>(null);
   const [kunci, setKunci] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [pratinjau, setPratinjau] = useState<{baris:number;kolom:string[];kurang:string[];duplikat:number;kosong:number;contoh:string[][]}|null>(null);
+  const [errorPreview, setErrorPreview] = useState<string|null>(null);
+  const jenis = judul.toLowerCase().includes('soal') ? 'soal' : judul.toLowerCase().includes('peserta') ? 'peserta'
+    : judul.toLowerCase().includes('pengawas') ? 'pengawas' : judul.toLowerCase().includes('ruang') ? 'ruang' : 'esai';
+  async function periksa() {
+    if (!berkas) return;
+    setBusy(true); setErrorPreview(null); setPratinjau(null);
+    try {
+      const r=await aksi<typeof pratinjau>({aksi:'pratinjau-impor',jenis,berkas:await fileKeBase64(berkas),namaFile:berkas.name});
+      setPratinjau(r);
+    } catch(e) {setErrorPreview((e as Error).message);} finally {setBusy(false);}
+  }
 
   async function jalankan() {
     if (!berkas) return;
@@ -221,6 +234,7 @@ function ImporBox({
     setBusy(false);
     if (ok) {
       setBerkas(null);
+      setPratinjau(null);
       setKunci((k) => k + 1);
     }
   }
@@ -234,11 +248,20 @@ function ImporBox({
       </ol>
       <div className="import-actions">
         <a className="btn outline" href={templateHref}>Unduh Template Excel</a>
-        <input key={kunci} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setBerkas(e.target.files?.[0] ?? null)} />
-        <button className="btn" disabled={!berkas || busy} onClick={jalankan}>
-          {busy ? 'Mengimpor…' : 'Impor'}
+        <input key={kunci} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => {setBerkas(e.target.files?.[0] ?? null);setPratinjau(null);setErrorPreview(null);}} />
+        <button className="btn outline" disabled={!berkas || busy} onClick={periksa}>{busy ? 'Memeriksa…' : '2. Periksa berkas'}</button>
+        <button className="btn" disabled={!berkas || busy || !pratinjau || pratinjau.kurang.length>0 || pratinjau.duplikat>0} onClick={jalankan}>
+          {busy ? 'Mengimpor…' : '3. Konfirmasi impor'}
         </button>
       </div>
+      {errorPreview && <div className="notice danger">{errorPreview}</div>}
+      {pratinjau && <div className="import-preview-box">
+        <strong>Pratinjau berkas · {pratinjau.baris} baris · {pratinjau.kolom.length} kolom</strong>
+        <div>Kolom: {pratinjau.kolom.join(', ')}</div>
+        {pratinjau.kurang.length > 0 && <div className="warn">Kolom wajib tidak ditemukan: {pratinjau.kurang.join(', ')}</div>}
+        {pratinjau.duplikat > 0 && <div className="warn">Ada {pratinjau.duplikat} identifier yang berulang dalam file.</div>}
+        <small>Pratinjau hanya memeriksa struktur; validasi akhir tetap dilakukan sebelum data tersimpan.</small>
+      </div>}
     </div>
   );
 }
@@ -266,7 +289,7 @@ function MonitoringTab({ setError }: { setError: (m: string | null) => void }) {
         .then(setRuangList)
         .catch((e: Error) => setError(e.message));
     muatRuang();
-    const t = setInterval(muatRuang, 15_000);
+    const t = setInterval(() => { if (document.visibilityState === 'visible') void muatRuang(); }, 20_000);
     return () => clearInterval(t);
   }, [ujianId, setError]);
 
@@ -331,11 +354,19 @@ function MonitoringTab({ setError }: { setError: (m: string | null) => void }) {
 function PesertaTab({ rujukan, setError, setInfo }: Props) {
   const [bidang, setBidang] = useState('');
   const [daftar, setDaftar] = useState<{ id: string; username: string; nama: string; bidang: string; status: string }[]>([]);
+  const [cari, setCari] = useState('');
+  const [queryCari, setQueryCari] = useState('');
+  const [halaman, setHalaman] = useState(1);
+  const [total, setTotal] = useState(0);
+  useEffect(() => { const t = setTimeout(() => { setQueryCari(cari); setHalaman(1); }, 300); return () => clearTimeout(t); }, [cari]);
   const [form, setForm] = useState({ id: '', username: '', nama: '', bidang: '237', password: '', status: 'ACTIVE' });
 
   const muat = useCallback(() => {
-    baca<typeof daftar>(`aksi=peserta${bidang ? `&bidang=${bidang}` : ''}`).then(setDaftar).catch((e: Error) => setError(e.message));
-  }, [bidang, setError]);
+    const q = new URLSearchParams({ aksi:'peserta-paged', page: String(halaman), search: queryCari });
+    if (bidang) q.set('bidang',bidang);
+    baca<{items:typeof daftar;total:number}>(q.toString())
+      .then((d) => { setDaftar(d.items); setTotal(d.total); }).catch((e:Error) => setError(e.message));
+  }, [bidang, halaman, queryCari, setError]);
 
   useEffect(() => { muat(); }, [muat]);
 
@@ -373,7 +404,8 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
       <div className="card">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <b>Daftar Peserta</b>
-          <select value={bidang} onChange={(e) => setBidang(e.target.value)} style={{ marginLeft: 'auto', padding: 6 }}>
+          <input aria-label="Cari nama atau username peserta" placeholder="Cari nama / username..." value={cari} onChange={(e) => setCari(e.target.value)} style={{ maxWidth: 250 }} />
+          <select value={bidang} onChange={(e) => { setBidang(e.target.value); setHalaman(1); }} style={{ marginLeft: 'auto', padding: 6 }}>
             <option value="">Semua Bidang Studi</option>
             {rujukan.bidang.map((b) => <option key={b.kode} value={b.kode}>{b.kode} – {b.nama}</option>)}
           </select>
@@ -395,6 +427,9 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
             </tbody>
           </table>
         </div>
+        <div className="table-pages"><span>Menampilkan {daftar.length} dari {total} peserta · Halaman {halaman} / {Math.max(1,Math.ceil(total/25))}</span>
+          <div><button className="btn outline" disabled={halaman<=1} onClick={() => setHalaman((v)=>v-1)}>← Sebelumnya</button>{' '}
+          <button className="btn outline" disabled={halaman*25>=total} onClick={() => setHalaman((v)=>v+1)}>Berikutnya →</button></div></div>
       </div>
 
       <div className="card">
@@ -500,15 +535,20 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
   const [bidang, setBidang] = useState('');
   const [tipe, setTipe] = useState('');
   const [daftar, setDaftar] = useState<{ id: string; kode: string | null; bidang: string; tipe: string; isi: string; status: string; jumlah_opsi: number }[]>([]);
+  const [cari, setCari] = useState('');
+  const [queryCari, setQueryCari] = useState('');
+  const [halaman, setHalaman] = useState(1);
+  const [total, setTotal] = useState(0);
+  useEffect(() => { const t = setTimeout(() => { setQueryCari(cari); setHalaman(1); }, 300); return () => clearTimeout(t); }, [cari]);
   const [form, setForm] = useState({ id: '', kode: '', bidang: '237', tipe: 'PILIHAN_GANDA', isi: '', rubrik: '', status: 'PUBLISHED' });
   const [opsi, setOpsi] = useState<OpsiForm[]>(KOSONG_OPSI());
 
   const muat = useCallback(() => {
-    const q = new URLSearchParams({ aksi: 'soal' });
+    const q = new URLSearchParams({ aksi: 'soal-paged',page:String(halaman),search:queryCari });
     if (bidang) q.set('bidang', bidang);
     if (tipe) q.set('tipe', tipe);
-    baca<typeof daftar>(q.toString()).then(setDaftar).catch((e: Error) => setError(e.message));
-  }, [bidang, tipe, setError]);
+    baca<{items:typeof daftar;total:number}>(q.toString()).then((d) => {setDaftar(d.items);setTotal(d.total);}).catch((e: Error) => setError(e.message));
+  }, [bidang, tipe, halaman, queryCari, setError]);
 
   useEffect(() => { muat(); }, [muat]);
 
@@ -560,11 +600,12 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
 
       <div className="card">
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-          <select value={bidang} onChange={(e) => setBidang(e.target.value)} style={{ padding: 6 }}>
+          <input placeholder="Cari kode atau isi soal..." aria-label="Cari soal" value={cari} onChange={(e)=>setCari(e.target.value)} style={{maxWidth:280}} />
+          <select value={bidang} onChange={(e) => { setBidang(e.target.value);setHalaman(1); }} style={{ padding: 6 }}>
             <option value="">Semua Bidang Studi</option>
             {rujukan.bidang.map((b) => <option key={b.kode} value={b.kode}>{b.kode} – {b.nama}</option>)}
           </select>
-          <select value={tipe} onChange={(e) => setTipe(e.target.value)} style={{ padding: 6 }}>
+          <select value={tipe} onChange={(e) => { setTipe(e.target.value);setHalaman(1); }} style={{ padding: 6 }}>
             <option value="">Semua tipe</option>
             <option value="PILIHAN_GANDA">Pilihan ganda</option>
             <option value="ESAI">Esai</option>
@@ -584,6 +625,9 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
             {daftar.length === 0 && <tr><td colSpan={6}>Belum ada soal.</td></tr>}
           </tbody>
         </table>
+        <div className="table-pages"><span>Menampilkan {daftar.length} dari {total} soal · Halaman {halaman} / {Math.max(1,Math.ceil(total/25))}</span>
+          <div><button className="btn outline" disabled={halaman<=1} onClick={()=>setHalaman((v)=>v-1)}>← Sebelumnya</button>{' '}
+          <button className="btn outline" disabled={halaman*25>=total} onClick={()=>setHalaman((v)=>v+1)}>Berikutnya →</button></div></div>
       </div>
 
       <div className="card">
@@ -686,7 +730,7 @@ function SebCard({ seb, onRefresh, setError, setInfo }: { seb: Seb[]; onRefresh:
     <div className="card">
       <h3>Konfigurasi SEB</h3>
       <div className="notice neutral" style={{ fontSize: 13 }}>
-        Masukkan Browser Exam Key (BEK) dari SEB Config Tool. Nilai BEK disimpan di server dan tidak akan ditampilkan lagi. Pastikan file <code>.seb</code> peserta memakai BEK yang sama.
+        Masukkan BEK SHA-256 (64 karakter heksadesimal) setelah menyimpan file <code>.seb</code> final. Kunci disimpan aman di server dan tidak ditampilkan lagi. SEB klasik Windows memerlukan header RequestHash; kompatibilitas SEB macOS modern harus diuji dengan perangkat asli.
       </div>
 
       {seb.length === 0 ? (
@@ -717,7 +761,7 @@ function SebCard({ seb, onRefresh, setError, setInfo }: { seb: Seb[]; onRefresh:
           <option value="MACOS">macOS</option>
         </select>
         <input type="password" autoComplete="off" placeholder="Browser Exam Key (BEK)" value={bek} onChange={(e) => setBek(e.target.value)} />
-        <button className="btn" disabled={simpanBusy || !nama.trim() || bek.trim().length < 16} onClick={tambah}>Tambah</button>
+        <button className="btn" disabled={simpanBusy || !nama.trim() || !/^[a-f0-9]{64}$/i.test(bek.trim())} onClick={tambah}>Tambah</button>
       </div>
     </div>
   );
@@ -733,6 +777,15 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
   const [soalIds, setSoalIds] = useState<string[]>([]);
   const [sebIds, setSebIds] = useState<string[]>([]);
   const [bankSoal, setBankSoal] = useState<{ id: string; tipe: string; isi: string; kode: string | null }[]>([]);
+  const [bankCari, setBankCari] = useState('');
+  const [bankCariAktif, setBankCariAktif] = useState('');
+  const [bankPage, setBankPage] = useState(1);
+  const [bankTotal, setBankTotal] = useState(0);
+  const [metadataTerpilih, setMetadataTerpilih] = useState<Record<string,{kode:string|null;tipe:string;isi:string}>>({});
+  const [cariPenugasan,setCariPenugasan] = useState('');
+  const [pagePenugasan,setPagePenugasan] = useState(1);
+  const [pilihRuangMassal,setPilihRuangMassal] = useState('');
+  useEffect(() => {const t=setTimeout(()=>{setBankCariAktif(bankCari);setBankPage(1);},300);return ()=>clearTimeout(t);},[bankCari]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [penugasan, setPenugasan] = useState<Record<string, string>>({});
   const [pengawasRuang, setPengawasRuang] = useState<Record<string, string[]>>({});
@@ -744,10 +797,14 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
 
   // Bank soal PUBLISHED sesuai Bidang Studi ujian yang sedang diedit.
   useEffect(() => {
-    baca<typeof bankSoal>(`aksi=soal&bidang=${form.bidang}`)
-      .then((r) => setBankSoal(r.filter((s: any) => s.status === 'PUBLISHED')))
+    const q = new URLSearchParams({aksi:'soal-bank-paged',bidang:form.bidang,page:String(bankPage),search:bankCariAktif});
+    baca<{items:typeof bankSoal;total:number}>(q.toString())
+      .then((r) => {
+        setBankSoal(r.items);setBankTotal(r.total);
+        setMetadataTerpilih((prev) => ({...prev,...Object.fromEntries(r.items.map((s)=>[s.id,{kode:s.kode,tipe:s.tipe,isi:s.isi}]))}));
+      })
       .catch(() => setBankSoal([]));
-  }, [form.bidang]);
+  }, [form.bidang,bankPage,bankCariAktif]);
 
   async function salin(id: string) {
     setError(null);
@@ -770,6 +827,7 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
       ESAI: { durasi: String(es?.durasi_menit ?? 60), mulai: keInputLokal(es?.mulai), selesai: keInputLokal(es?.selesai) },
     });
     setSoalIds(d.soal.map((s) => s.soal_id));
+    setMetadataTerpilih((prev)=>({...prev,...Object.fromEntries(d.soal.map((s)=>[s.soal_id,{kode:null,tipe:s.tipe,isi:s.isi}]))}));
     setSebIds(d.seb);
     setPenugasan(Object.fromEntries(d.pesertaBidang.filter((p) => p.ruang_id).map((p) => [p.id, p.ruang_id as string])));
     setPengawasRuang(Object.fromEntries(d.ruang.map((r) => [r.id, r.pengawas])));
@@ -779,6 +837,7 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
     setForm(KOSONG_UJIAN);
     setDetail(null);
     setSoalIds([]);
+    setMetadataTerpilih({});
     setSebIds([]);
     setPenugasan({});
     setPengawasRuang({});
@@ -820,7 +879,7 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
       const peserta = Object.entries(penugasan).filter(([, ruang]) => ruang).map(([userId, ruangId]) => ({ userId, ruangId }));
       const pengawas = Object.entries(pengawasRuang).flatMap(([ruangId, ids]) => ids.map((pengawasId) => ({ ruangId, pengawasId })));
       await aksi({ aksi: 'simpan-penugasan', ujianId: detail.id, data: { peserta, pengawas } });
-      setInfo('Penugasan disimpan. Token per ruang dibuat otomatis.');
+      setInfo('Penugasan disimpan. Token lama dipertahankan; token baru hanya untuk ruang baru.');
       await buka(detail.id);
     } catch (e) {
       setError((e as Error).message);
@@ -837,6 +896,8 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
   }
 
   const pesertaTersedia = detail?.pesertaBidang ?? [];
+  const pesertaTerfilter = pesertaTersedia.filter((p) => `${p.nama} ${p.username}`.toLowerCase().includes(cariPenugasan.toLowerCase()));
+  const pesertaTerlihat = pesertaTerfilter.slice((pagePenugasan-1)*50,pagePenugasan*50);
   const pesertaRuang = (ruangId: string) => Object.values(penugasan).filter((r) => r === ruangId).length;
 
   return (
@@ -902,7 +963,9 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
           </div>
         ))}
 
-        <h3 style={{ marginTop: 14, fontSize: 15 }}>Soal (urutan sesuai centang)</h3>
+        <h3 style={{ marginTop: 14, fontSize: 15 }}>Soal (urutan sesuai centang) · {soalIds.length} terpilih</h3>
+        <div className="table-toolbar"><input aria-label="Cari bank soal" placeholder="Cari kode atau isi bank soal..." value={bankCari} onChange={(e)=>setBankCari(e.target.value)} />
+        <span>{bankTotal} soal sesuai pencarian</span></div>
         <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #d7dde6', borderRadius: 6, padding: 8 }}>
           {bankSoal.map((s) => (
             <label key={s.id} style={{ display: 'flex', gap: 8, fontSize: 14, marginBottom: 4 }}>
@@ -910,8 +973,16 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
               <span>[{s.tipe === 'ESAI' ? 'Esai' : 'PG'}] {s.kode ? `${s.kode} – ` : ''}{teksPolos(s.isi).slice(0, 100)}</span>
             </label>
           ))}
-          {bankSoal.length === 0 && <div style={{ fontSize: 13 }}>Belum ada soal PUBLISHED untuk Bidang Studi ini.</div>}
+          {bankSoal.length === 0 && <div style={{ fontSize: 13 }}>Tidak ada soal yang cocok. Gunakan pencarian.</div>}
         </div>
+        <div className="table-pages"><span>Halaman bank soal {bankPage} / {Math.max(1,Math.ceil(bankTotal/50))}</span>
+          <div><button className="btn outline" disabled={bankPage<=1} onClick={()=>setBankPage((v)=>v-1)}>←</button>{' '}
+          <button className="btn outline" disabled={bankPage*50>=bankTotal} onClick={()=>setBankPage((v)=>v+1)}>→</button></div></div>
+        {soalIds.length>0 && <details style={{marginTop:12}}><summary style={{cursor:'pointer'}}>Lihat {soalIds.length} soal terpilih (klik untuk hapus)</summary>
+          <div style={{maxHeight:150,overflow:'auto',marginTop:8}}>{soalIds.map((id,i)=><div key={id} style={{display:'flex',justifyContent:'space-between',gap:8,padding:'6px 0',borderBottom:'1px solid #edf2f7'}}>
+            <span>{i+1}. {metadataTerpilih[id]?.kode || metadataTerpilih[id]?.isi?.slice(0,80) || id}</span>
+            <button className="btn outline" type="button" onClick={()=>setSoalIds((ids)=>ids.filter((x)=>x!==id))}>Hapus</button></div>)}</div>
+        </details>}
 
         <h3 style={{ marginTop: 14, fontSize: 15 }}>Konfigurasi SEB</h3>
         {rujukan.seb.length === 0 && <div className="info" style={{ fontSize: 13 }}>Belum ada konfigurasi SEB. Tambahkan di kartu Konfigurasi SEB pada tab ini.</div>}
@@ -974,12 +1045,16 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
 
           <div className="card">
             <h3>Penugasan Peserta ({detail.bidang})</h3>
-            <div style={{ fontSize: 13, marginBottom: 8 }}>Pilih ruang untuk setiap peserta. Kosongkan jika belum ditempatkan.</div>
+            <div style={{ fontSize: 13, marginBottom: 8 }}>Pilih ruang untuk setiap peserta. Menampilkan 50 peserta per halaman; semua pilihan disimpan bersama.</div>
+            <div className="table-toolbar"><input aria-label="Cari peserta untuk penugasan" placeholder="Cari nama/username peserta..." value={cariPenugasan} onChange={(e)=>{setCariPenugasan(e.target.value);setPagePenugasan(1);}} />
+            <select value={pilihRuangMassal} onChange={(e)=>setPilihRuangMassal(e.target.value)} style={{maxWidth:260}}><option value="">Pilih ruang massal...</option>
+              {rujukan.ruang.map((r)=><option key={r.id} value={r.id}>{r.kode} – {r.nama}</option>)}</select>
+            <button className="btn outline" disabled={detail.sudahMulai||!pilihRuangMassal||!pesertaTerlihat.length} onClick={()=>setPenugasan((prev)=>({...prev,...Object.fromEntries(pesertaTerlihat.map((r)=>[r.id,pilihRuangMassal]))}))}>Terapkan ke {pesertaTerlihat.length} terlihat</button></div>
             <div style={{ overflowX: 'auto' }}>
               <table className="tabel">
                 <thead><tr><th>Nama</th><th>Username</th><th>Ruang</th></tr></thead>
                 <tbody>
-                  {pesertaTersedia.map((p) => (
+                  {pesertaTerlihat.map((p) => (
                     <tr key={p.id}>
                       <td>{p.nama}</td><td>{p.username}</td>
                       <td>
@@ -990,10 +1065,13 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
                       </td>
                     </tr>
                   ))}
-                  {pesertaTersedia.length === 0 && <tr><td colSpan={3}>Belum ada peserta aktif di Bidang Studi ini.</td></tr>}
+                  {pesertaTerfilter.length === 0 && <tr><td colSpan={3}>Tidak ada peserta yang cocok.</td></tr>}
                 </tbody>
               </table>
             </div>
+            <div className="table-pages"><span>Menampilkan {pesertaTerlihat.length} dari {pesertaTerfilter.length} peserta · Halaman {pagePenugasan} / {Math.max(1,Math.ceil(pesertaTerfilter.length/50))}</span>
+              <div><button className="btn outline" disabled={pagePenugasan<=1} onClick={()=>setPagePenugasan((v)=>v-1)}>←</button>{' '}
+              <button className="btn outline" disabled={pagePenugasan*50>=pesertaTerfilter.length} onClick={()=>setPagePenugasan((v)=>v+1)}>→</button></div></div>
             <div style={{ marginTop: 10 }}>
               <button className="btn" disabled={detail.sudahMulai} onClick={simpanPenugasan}>Simpan Penugasan</button>
             </div>

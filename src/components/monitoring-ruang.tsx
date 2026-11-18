@@ -49,7 +49,7 @@ export function MonitoringRuangTable({ ujianId, ruangId, onError }: { ujianId: s
   useEffect(() => {
     setData(null);
     muat();
-    const t = setInterval(muat, 15_000);
+    const t = setInterval(() => { if (document.visibilityState === 'visible') void muat(); }, 20_000);
     return () => clearInterval(t);
   }, [muat]);
 
@@ -85,7 +85,7 @@ export function MonitoringRuangTable({ ujianId, ruangId, onError }: { ujianId: s
             <th>Status</th>
             <th>PG (tersimpan / sisa)</th>
             <th>Esai (tersimpan / sisa)</th>
-            <th>Pelanggaran fokus</th>
+            <th>Indikasi perpindahan tab</th>
             <th>Aksi</th>
           </tr>
         </thead>

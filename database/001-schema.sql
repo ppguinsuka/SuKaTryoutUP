@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS seb_konfigurasi (
   id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   nama      text NOT NULL,
   platform  text NOT NULL CHECK (platform IN ('WINDOWS', 'MACOS')),
-  bek       text NOT NULL UNIQUE,          -- Browser Exam Key asli (rahasia server). SEB mengirim SHA-256(URL + BEK)
+  bek       text NOT NULL UNIQUE,          -- BEK asli (hex; rahasia server). RequestHash=SHA256(URL UTF8 || 32 byte BEK)
   aktif     boolean NOT NULL DEFAULT true
 );
 

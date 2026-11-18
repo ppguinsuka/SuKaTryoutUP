@@ -7,8 +7,8 @@ import { kontenKeHtml } from '@/lib/konten';
 
 type Tipe = 'PILIHAN_GANDA' | 'ESAI';
 type Bagian = { tipe: Tipe; status: string; jumlahTersimpan: number; sisaDetik: number };
-type Nomor = { n: number; soalId: string; terjawab: boolean };
-type Soal = { n: number; id: string; tipe: Tipe; isi: string; opsi: { label: string; teks: string }[] | null; nilai: string };
+type Nomor = { n: number; soalId: string; terjawab: boolean; ragu?: boolean };
+type Soal = { n: number; id: string; tipe: Tipe; isi: string; opsi: { label: string; teks: string }[] | null; nilai: string; versiServer?: number; disimpanAt?: string | null };
 type View = {
   pengerjaan: { id: string; status: string };
   bagian: Bagian[];
@@ -17,6 +17,24 @@ type View = {
 };
 
 const MAKS_ESAI = 10000;
+const DRAFT_MAX_AGE = 24 * 3600_000;
+type CacheDraft = { nilai: string; versi: number; waktu: number };
+const kunciDraft = (id: string, soalId: string) => `suka:jawaban:${id}:${soalId}`;
+function bacaDraft(key: string): CacheDraft | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as CacheDraft;
+    if (!data || typeof data.nilai !== 'string' || Date.now() - data.waktu > DRAFT_MAX_AGE) {
+      localStorage.removeItem(key); return null;
+    }
+    return data;
+  } catch { return null; }
+}
+function simpanDraft(key: string, entry: CacheDraft) {
+  try { localStorage.setItem(key, JSON.stringify(entry)); } catch { /* private mode/quota */ }
+}
+
 const NAMA: Record<Tipe, string> = { PILIHAN_GANDA: 'Pilihan Ganda', ESAI: 'Esai' };
 
 export default function KerjakanPage({ params }: { params: Promise<{ id: string }> }) {
@@ -31,6 +49,9 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const antreanRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const lastRevisionRef = useRef(0);
 
   const bagianAktif = view?.bagian.find((b) => b.tipe === tipe);
   const pgSelesai = view?.bagian.find((b) => b.tipe === 'PILIHAN_GANDA')?.status === 'SELESAI';
@@ -46,8 +67,16 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
       try {
         const v = await api<View>(`/api/peserta/pengerjaan/${id}?tipe=${t}&n=${n}`);
         setView(v);
-        setDraft(v.soal?.nilai ?? '');
-        setSaved(v.soal?.nilai ?? '');
+        const soal = v.soal;
+        const key = soal ? kunciDraft(id, soal.id) : '';
+        const local = soal ? bacaDraft(key) : null;
+        const revisionServer = soal?.versiServer ?? 0;
+        const pakaiCache = !!local && local.versi > revisionServer;
+        setDraft(pakaiCache ? local!.nilai : soal?.nilai ?? '');
+        setSaved(soal?.nilai ?? '');
+        if (local && !pakaiCache) localStorage.removeItem(key);
+        lastRevisionRef.current = Math.max(lastRevisionRef.current, revisionServer, local?.versi ?? 0);
+        setRagu(new Set(v.nomor.filter((x) => x.ragu).map((x) => x.soalId)));
         setSisa(v.bagian.find((b) => b.tipe === t)?.sisaDetik ?? null);
         setError(null);
       } catch (e) {
@@ -61,24 +90,57 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
     load('PILIHAN_GANDA', 1);
   }, [load]);
 
-  /** Menyimpan jawaban hanya jika berubah. Dipanggil saat pindah soal, ganti bagian, dan selesai. */
-  async function simpanJikaBerubah(): Promise<boolean> {
+  /** Simpan berurutan, persisten lokal sampai ACK server, tidak tertimpa request lama. */
+  const simpanJikaBerubah = useCallback(async (): Promise<boolean> => {
+    const cur = { ...latest.current };
+    if (!cur.soalId || cur.draft === cur.saved) return antreanRef.current;
+    const key = kunciDraft(id, cur.soalId);
+    const pending = bacaDraft(key);
+    const versi = pending?.nilai === cur.draft
+      ? pending.versi
+      : Math.max(Date.now(), lastRevisionRef.current + 1);
+    lastRevisionRef.current = Math.max(lastRevisionRef.current, versi);
+    simpanDraft(key, { nilai: cur.draft, versi, waktu: Date.now() });
+    const lakukan = async () => {
+      setSaving(true);
+      try {
+        const hasil = await post<{ versiServer: number; tersimpan: boolean }>(
+          `/api/peserta/pengerjaan/${id}/aksi`,
+          { aksi: 'simpan', tipe: cur.tipe, soalId: cur.soalId, nilai: cur.draft, versi }
+        );
+        if (!hasil.tersimpan || Number(hasil.versiServer) < versi) {
+          // Server sudah memiliki revisi lebih baru. Jangan menimpa.
+          await load(cur.tipe, view?.soal?.n ?? 1);
+          return true;
+        }
+        if (bacaDraft(key)?.versi === versi) localStorage.removeItem(key);
+        if (latest.current.soalId === cur.soalId && latest.current.draft === cur.draft) {
+          setSaved(cur.draft);
+        }
+        setError(null);
+        return true;
+      } catch (e) {
+        setError(`Jawaban belum tersimpan di server. Draft disimpan di perangkat ini. ${(e as Error).message}`);
+        return false;
+      } finally { setSaving(false); }
+    };
+    antreanRef.current = antreanRef.current.catch(() => false).then(lakukan);
+    return antreanRef.current;
+  }, [id, load, view?.soal?.n]);
+
+  // Draft ditulis segera ke perangkat, lalu autosave PG cepat / esai setelah berhenti mengetik.
+  useEffect(() => {
     const cur = latest.current;
-    if (!cur.soalId || cur.draft === cur.saved) return true;
-    try {
-      await post(`/api/peserta/pengerjaan/${id}/aksi`, {
-        aksi: 'simpan',
-        tipe: cur.tipe,
-        soalId: cur.soalId,
-        nilai: cur.draft,
-      });
-      setSaved(cur.draft);
-      return true;
-    } catch (e) {
-      setError((e as Error).message);
-      return false;
-    }
-  }
+    if (!cur.soalId || cur.draft === cur.saved || bagianAktif?.status !== 'SEDANG_DIKERJAKAN') return;
+    const key = kunciDraft(id, cur.soalId);
+    const before = bacaDraft(key);
+    const versi = before?.nilai === cur.draft
+      ? before.versi : Math.max(Date.now(), lastRevisionRef.current + 1);
+    lastRevisionRef.current = Math.max(versi, lastRevisionRef.current);
+    simpanDraft(key, { nilai: cur.draft, versi, waktu: Date.now() });
+    const t = setTimeout(() => { void simpanJikaBerubah(); }, cur.tipe === 'ESAI' ? 1800 : 350);
+    return () => clearTimeout(t);
+  }, [draft, saved, id, tipe, view?.soal?.id, bagianAktif?.status, simpanJikaBerubah]);
 
   async function pindahSoal(n: number) {
     if (busy || !view?.soal) return;
@@ -141,22 +203,23 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
     return () => clearTimeout(t);
   }, [sisa, tipe, nomorAktif, bagianAktif?.status, load]);
 
-  // Simpan otomatis esai setiap 60 detik (tanpa mengganggu pengetikan).
+  // Retry ketika koneksi kembali; pemeriksaan periodik hanya untuk draft yang gagal.
   useEffect(() => {
-    const t = setInterval(() => {
-      const cur = latest.current;
-      if (cur.tipe !== 'ESAI' || !cur.soalId || cur.draft === cur.saved) return;
-      post(`/api/peserta/pengerjaan/${cur.id}/aksi`, {
-        aksi: 'simpan',
-        tipe: 'ESAI',
-        soalId: cur.soalId,
-        nilai: cur.draft,
-      })
-        .then(() => setSaved(cur.draft))
-        .catch(() => undefined);
-    }, 60_000);
-    return () => clearInterval(t);
-  }, []);
+    const retry = () => { if (latest.current.draft !== latest.current.saved) void simpanJikaBerubah(); };
+    window.addEventListener('online', retry);
+    const interval = window.setInterval(retry, 20_000);
+    return () => { window.removeEventListener('online', retry); clearInterval(interval); };
+  }, [simpanJikaBerubah]);
+
+  // Catat indikasi perpindahan tab untuk pengawas. Bukan penentu otomatis kecurangan.
+  useEffect(() => {
+    const lapor = () => {
+      if (!document.hidden || latest.current.soalId === null) return;
+      void post(`/api/peserta/pengerjaan/${id}/aksi`, { aksi: 'fokus' }).catch(() => undefined);
+    };
+    document.addEventListener('visibilitychange', lapor);
+    return () => document.removeEventListener('visibilitychange', lapor);
+  }, [id]);
 
   // Jika halaman ditutup, kirim jawaban yang belum tersimpan dengan keepalive.
   useEffect(() => {
@@ -166,7 +229,7 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
       fetch(`/api/peserta/pengerjaan/${cur.id}/aksi`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aksi: 'simpan', tipe: cur.tipe, soalId: cur.soalId, nilai: cur.draft }),
+        body: JSON.stringify({ aksi: 'simpan', tipe: cur.tipe, soalId: cur.soalId, nilai: cur.draft, versi: bacaDraft(kunciDraft(id,cur.soalId))?.versi ?? Date.now() }),
         keepalive: true,
       }).catch(() => undefined);
     };
@@ -181,9 +244,9 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
     <>
       <div className="topbar">
         <div className="brand">
-          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" />
+          <img src="/suka-sungai.png" alt="Logo SuKa Tryout" />
           <div>
-            SuKaTryoutUP
+            SuKa Tryout
             <div className="sub">Pengerjaan Ujian</div>
           </div>
         </div>
@@ -244,7 +307,7 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                 <b>Soal No {soal.n}</b>
                 <span style={{ fontSize: 13, color: belumTersimpan ? '#b26a00' : '#666' }}>
-                  {belumTersimpan ? 'Belum tersimpan' : 'Tersimpan'}
+                  {saving ? 'Menyimpan…' : belumTersimpan ? 'Draft belum tersinkron' : 'Tersimpan di server'}
                 </span>
               </div>
               <div className="soal-html" style={{ lineHeight: 1.6, marginBottom: 14 }} dangerouslySetInnerHTML={{ __html: kontenKeHtml(soal.isi) }} />
@@ -293,13 +356,15 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
                 </button>
                 <button
                   className="btn oranye"
-                  onClick={() => {
-                    setRagu((r) => {
-                      const next = new Set(r);
-                      if (next.has(soal.id)) next.delete(soal.id);
-                      else next.add(soal.id);
-                      return next;
-                    });
+                  onClick={async () => {
+                    const nextValue = !ragu.has(soal.id);
+                    setRagu((prev) => { const next = new Set(prev); if (nextValue) next.add(soal.id); else next.delete(soal.id); return next; });
+                    try {
+                      await post(`/api/peserta/pengerjaan/${id}/aksi`, { aksi: 'ragu', tipe, soalId: soal.id, ragu: nextValue });
+                    } catch (e) {
+                      setRagu((prev) => { const next = new Set(prev); if (nextValue) next.delete(soal.id); else next.add(soal.id); return next; });
+                      setError((e as Error).message);
+                    }
                   }}
                 >
                   {soalSaatIni ? 'Batal Ragu' : 'Tandai Ragu'}

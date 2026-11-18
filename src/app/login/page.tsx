@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { Eye, EyeOff, GraduationCap, LockKeyhole, ShieldCheck, Users, ClipboardCheck, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, LockKeyhole, ShieldCheck, Users, ClipboardCheck, ArrowRight } from 'lucide-react';
 import { post } from '@/lib/client';
 import '../admin-theme.css';
 
@@ -33,9 +33,9 @@ function LoginForm() {
   }
 
   return <div className="login-page">
-    <section className="login-brand-panel" aria-label="Tentang SuKaTryoutUP">
+    <section className="login-brand-panel" aria-label="Tentang SuKa Tryout">
       <div className="login-brand-inner">
-        <div className="login-brand-logo"><span className="brand-emblem"><GraduationCap size={27}/></span><span>SuKaTryoutUP</span></div>
+        <div className="login-brand-logo"><span className="brand-emblem"><img src="/suka-sungai.png" alt="Logo S SuKa Tryout" width="38" height="38" /></span><span>SuKa <b>Tryout</b></span></div>
         <span className="eyebrow light">PLATFORM TRYOUT TERPADU</span>
         <h1>Persiapan ujian,<br/>lebih terarah.</h1>
         <p>Sistem tryout UIN Sunan Kalijaga Yogyakarta untuk peserta, panitia, dan pengawas. Kelola jadwal, pengawasan, dan hasil ujian dengan lebih terstruktur.</p>
@@ -62,7 +62,7 @@ function LoginForm() {
           {error && <div className="form-error" role="alert">{error}</div>}
           <button className="button primary" type="submit" disabled={loading}>{loading ? 'Sedang masuk…' : <>Masuk ke Akun <ArrowRight size={18}/></>}</button>
         </form>
-        <p className="login-footnote">SuKaTryoutUP · UIN Sunan Kalijaga Yogyakarta</p>
+        <p className="login-footnote">SuKa Tryout · UIN Sunan Kalijaga Yogyakarta</p>
       </div>
     </section>
   </div>;

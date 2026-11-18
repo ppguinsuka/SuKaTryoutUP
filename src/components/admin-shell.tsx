@@ -38,7 +38,7 @@ export function AdminShell<T extends string>({ title, subtitle, nav, active, onS
     <div className="admin-app">
       <aside className={open ? 'admin-sidebar open' : 'admin-sidebar'}>
         <div className="sidebar-brand tryout-brand">
-          <span className="brand-emblem"><GraduationCap size={24}/></span>
+          <span className="brand-emblem"><img src="/suka-sungai.png" alt="Logo SuKa Tryout" width="39" height="39" /></span>
           <span className="brand-copy"><strong>SuKaTryout<span>UP</span></strong><small>UIN SUNAN KALIJAGA</small></span>
         </div>
         <button className="sidebar-close" onClick={() => setOpen(false)} aria-label="Tutup menu"><X size={20} /></button>
