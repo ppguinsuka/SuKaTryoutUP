@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, post } from '@/lib/client';
 import { AdminShell } from '@/components/admin-shell';
+import '../admin-theme.css';
 
 type Tab = 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
 type Bidang = { kode: string; nama: string };

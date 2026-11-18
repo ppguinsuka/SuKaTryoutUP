@@ -4,12 +4,14 @@ import { Pool, type PoolClient } from 'pg';
 // dan koneksi wajib lewat pooler Supabase (port 6543).
 const g = globalThis as unknown as { __sukaPool?: Pool };
 
-// Koneksi SSL memakai sertifikat CA Supabase (DATABASE_CA_CERT), bukan sslmode di URL.
-// Parameter sslmode dihapus dari URL supaya pengaturan di sini yang berlaku.
+// Jika DATABASE_CA_CERT diisi, koneksi SSL memakai sertifikat CA Supabase dan verifikasi penuh.
+// Parameter sslmode di URL dihapus hanya dalam kasus ini, supaya pengaturan di sini yang berlaku.
+// Jika DATABASE_CA_CERT kosong, URL dipakai apa adanya (sslmode di URL tetap berlaku).
 const caPem = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n');
-const connectionString = process.env.DATABASE_URL?.replace(/([?&])sslmode=[^&]*(&|$)/, (_m, p1, p2) =>
-  p2 ? p1 : '',
-).replace(/[?&]$/, '');
+const urlAsli = process.env.DATABASE_URL;
+const connectionString = caPem
+  ? urlAsli?.replace(/([?&])sslmode=[^&]*(&|$)/, (_m, p1, p2) => (p2 ? p1 : '')).replace(/[?&]$/, '')
+  : urlAsli;
 
 export const pool: Pool =
   g.__sukaPool ??

@@ -1,8 +1,9 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { BarChart3, ClipboardList, FileQuestion, GraduationCap, LogOut, Menu, MonitorCheck, Users, X, type LucideIcon } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 
-export type NavItem<T extends string> = { id: T; label: string };
+export type NavItem<T extends string> = { id: T; label: string; icon?: LucideIcon };
 
 type Props<T extends string> = {
   title: string;
@@ -15,47 +16,66 @@ type Props<T extends string> = {
   children: ReactNode;
 };
 
-/** Layout panel admin: sidebar kiri, topbar, dan area konten (gaya SuKa Olimpiade). */
+/** Ikon default per tab Panitia, supaya tampilannya sama dengan panel SuKa Olimpiade. */
+export const IKON_PANITIA: Record<string, LucideIcon> = {
+  ujian: ClipboardList,
+  soal: FileQuestion,
+  peserta: Users,
+  pengawas: MonitorCheck,
+  ruang: GraduationCap,
+  nilai: BarChart3,
+};
+
+/** Layout panel admin: sidebar kiri, topbar, dan area konten (struktur sama dengan SuKa Olimpiade). */
 export function AdminShell<T extends string>({ title, subtitle, nav, active, onSelect, onLogout, userName, children }: Props<T>) {
+  const [open, setOpen] = useState(false);
+
   return (
     <div className="admin-app">
-      <aside className="admin-sidebar">
-        <div className="admin-brand">
-          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" />
-          <div>
-            <strong>{title}</strong>
-            <small>{subtitle}</small>
-          </div>
+      <aside className={open ? 'admin-sidebar open' : 'admin-sidebar'}>
+        <div className="sidebar-brand">
+          <img src="/logo-uin.png" alt="Logo UIN Sunan Kalijaga Yogyakarta" style={{ width: 165, height: 'auto' }} />
         </div>
-        <nav className="admin-nav">
-          {nav.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={item.id === active ? 'admin-link active' : 'admin-link'}
-              onClick={() => onSelect(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
+        <button className="sidebar-close" onClick={() => setOpen(false)} aria-label="Tutup menu"><X size={20} /></button>
+        <nav>
+          {nav.map((item) => {
+            const Icon = item.icon ?? IKON_PANITIA[item.id] ?? ClipboardList;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={item.id === active ? 'sidebar-link active' : 'sidebar-link'}
+                onClick={() => { onSelect(item.id); setOpen(false); }}
+              >
+                <Icon size={20} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
-        <div className="admin-footer">
+        <div className="sidebar-footer">
           <div className="admin-user">
-            <span className="admin-avatar">{(userName || 'A').charAt(0).toUpperCase()}</span>
+            <span className="avatar-button">{(userName || 'P').charAt(0).toUpperCase()}</span>
             <div>
-              <strong>{userName || 'Akun Admin'}</strong>
+              <strong>{userName || 'Akun Panitia'}</strong>
               <small>{subtitle}</small>
             </div>
           </div>
-          <button type="button" className="admin-link danger" onClick={onLogout}>Keluar</button>
+          <button type="button" className="sidebar-link danger-link" onClick={onLogout}>
+            <LogOut size={20} />
+            <span>Keluar</span>
+          </button>
         </div>
       </aside>
+      {open && <button aria-label="Tutup menu" className="sidebar-backdrop" onClick={() => setOpen(false)} />}
       <section className="admin-main">
         <header className="admin-topbar">
+          <button className="icon-button mobile-only" onClick={() => setOpen(true)} aria-label="Buka menu"><Menu size={22} /></button>
           <div>
             <strong>{title}</strong>
             <span>{subtitle}</span>
           </div>
+          <div className="topbar-spacer" />
         </header>
         <main className="admin-content">{children}</main>
       </section>
