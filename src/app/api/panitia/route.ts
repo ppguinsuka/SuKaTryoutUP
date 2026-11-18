@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
 import { requireRole } from '@/lib/auth';
+import { berkasDariBase64, bacaBerkas, buatTemplate, MIME_XLSX } from '@/lib/excel';
+import { imporSoal } from '@/lib/impor-soal';
 import { withTx } from '@/lib/db';
 import { AppError, jsonError, jsonOk } from '@/lib/errors';
 import {
@@ -62,6 +65,16 @@ export async function GET(req: Request) {
         const id = idParam(u.searchParams.get('ujianId'), 'ID ujian tidak valid.');
         return jsonOk(await withTx((c) => hasilUjian(c, id)));
       }
+      case 'template-peserta': {
+        const bidang = await withTx(async (c) => (await c.query('SELECT kode, nama FROM bidang_studi ORDER BY kode')).rows);
+        return berkasXlsx(buatTemplate('peserta', bidang), 'template-impor-peserta.xlsx');
+      }
+      case 'template-esai':
+        return berkasXlsx(buatTemplate('esai', []), 'template-impor-nilai-esai.xlsx');
+      case 'template-soal': {
+        const bidang = await withTx(async (c) => (await c.query('SELECT kode, nama FROM bidang_studi ORDER BY kode')).rows);
+        return berkasXlsx(buatTemplate('soal', bidang), 'template-impor-soal.xlsx');
+      }
       case 'ekspor-esai': {
         const id = idParam(u.searchParams.get('ujianId'), 'ID ujian tidak valid.');
         const csv = await withTx((c) => eksporEsai(c, id));
@@ -99,7 +112,14 @@ export async function POST(req: Request) {
         await withTx((c) => simpanPengawas(c, data));
         break;
       case 'impor-peserta': {
-        const n = await withTx((c) => imporPeserta(c, String(body.csv ?? '')));
+        const buf = berkasDariBase64(body.berkas);
+        const rows = bacaBerkas(buf, String(body.namaFile ?? ''));
+        const n = await withTx((c) => imporPeserta(c, rows));
+        return jsonOk({ jumlah: n });
+      }
+      case 'impor-soal': {
+        const rows = bacaBerkas(berkasDariBase64(body.berkas), String(body.namaFile ?? ''));
+        const n = await withTx((c) => imporSoal(c, rows));
         return jsonOk({ jumlah: n });
       }
       case 'simpan-soal': {
@@ -123,9 +143,11 @@ export async function POST(req: Request) {
       }
       case 'impor-esai': {
         const ujianId = idParam(body.ujianId, 'ID ujian tidak valid.');
-        const n = await withTx((c) =>
-          imporEsai(c, ujianId, String(body.csv ?? ''), String(body.namaFile ?? 'impor.csv'), user.id),
-        );
+        const buf = berkasDariBase64(body.berkas);
+        const namaFile = String(body.namaFile ?? 'impor.xlsx');
+        const rows = bacaBerkas(buf, namaFile);
+        const hash = createHash('sha256').update(buf).digest('hex');
+        const n = await withTx((c) => imporEsai(c, ujianId, rows, namaFile, user.id, hash));
         return jsonOk({ jumlah: n });
       }
       case 'publikasi': {
@@ -140,4 +162,15 @@ export async function POST(req: Request) {
   } catch (err) {
     return jsonError(err);
   }
+}
+
+/** Unduhan berkas Excel (template impor). */
+function berkasXlsx(buf: Buffer, namaFile: string): Response {
+  return new Response(new Uint8Array(buf), {
+    headers: {
+      'Content-Type': MIME_XLSX,
+      'Content-Disposition': `attachment; filename="${namaFile}"`,
+      'Cache-Control': 'no-store',
+    },
+  });
 }

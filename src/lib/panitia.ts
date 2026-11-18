@@ -1,7 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { hashPassword } from './auth';
 import { AppError } from './errors';
+import { MAKS_KONTEN, bersihkanHtml } from './sanitize';
+import { teksPolos } from './konten';
 
 type C = PoolClient;
 
@@ -20,6 +22,22 @@ function teks(v: unknown, pesan: string): string {
 function uuid(v: unknown, pesan: string): string {
   if (typeof v !== 'string' || !UUID.test(v)) throw new AppError(pesan, 400);
   return v;
+}
+/**
+ * Konten WYSIWYG (soal, opsi, rubrik): dibersihkan dengan allowlist.
+ * Mengembalikan '' jika tidak ada teks maupun gambar.
+ */
+function bersihkanKonten(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  if (v.length > MAKS_KONTEN) throw new AppError('Konten terlalu besar. Kecilkan ukuran gambar lalu coba lagi.', 400);
+  const bersih = bersihkanHtml(v).trim();
+  if (!teksPolos(bersih) && !/<img\s/i.test(bersih)) return '';
+  return bersih;
+}
+function konten(v: unknown, pesan: string): string {
+  const hasil = bersihkanKonten(v);
+  if (!hasil) throw new AppError(pesan, 400);
+  return hasil;
 }
 function tanggal(v: unknown, pesan: string): Date {
   const d = new Date(String(v));
@@ -172,8 +190,8 @@ export async function simpanPengawas(c: C, d: Record<string, unknown>) {
 }
 
 /** Impor peserta dari CSV: username,nama,bidang,password. Semua baris harus valid (all-or-nothing). */
-export async function imporPeserta(c: C, csv: string): Promise<number> {
-  const rows = parseCsv(csv);
+export async function imporPeserta(c: C, berkasRows: string[][]): Promise<number> {
+  const rows = berkasRows.map((r) => [...r]);
   if (rows.length && rows[0][0]?.toLowerCase() === 'username') rows.shift();
   const galat: string[] = [];
   rows.forEach((r, i) => {
@@ -228,18 +246,19 @@ export async function simpanSoal(c: C, d: Record<string, unknown>): Promise<stri
   const bidang = teks(d.bidang, 'Bidang Studi wajib dipilih.');
   const tipe = d.tipe;
   if (tipe !== 'PILIHAN_GANDA' && tipe !== 'ESAI') throw new AppError('Tipe soal tidak valid.', 400);
-  const isi = teks(d.isi, 'Isi soal wajib diisi.');
+  const isi = konten(d.isi, 'Isi soal wajib diisi.');
   const status = ['DRAFT', 'PUBLISHED', 'ARSIP'].includes(String(d.status)) ? String(d.status) : 'DRAFT';
   const kode = typeof d.kode === 'string' && d.kode.trim() ? d.kode.trim() : null;
-  const rubrik = tipe === 'ESAI' ? teks(d.rubrik, 'Rubrik penilaian esai wajib diisi.') : null;
+  const rubrik = tipe === 'ESAI' ? konten(d.rubrik, 'Rubrik penilaian esai wajib diisi.') : null;
   const skorMaks = tipe === 'ESAI' ? 100 : null;
 
   let opsi: { label: string; teks: string; benar: boolean }[] = [];
   if (tipe === 'PILIHAN_GANDA') {
     const daftar = Array.isArray(d.opsi) ? d.opsi : [];
     opsi = daftar
-      .filter((o: any) => o && typeof o.teks === 'string' && o.teks.trim())
-      .map((o: any) => ({ label: String(o.label).toUpperCase(), teks: o.teks.trim(), benar: !!o.benar }));
+      .filter((o: any) => o && typeof o.teks === 'string')
+      .map((o: any) => ({ label: String(o.label).toUpperCase(), teks: bersihkanKonten(o.teks), benar: !!o.benar }))
+      .filter((o) => o.teks !== '');
     if (opsi.length < 2) throw new AppError('Soal pilihan ganda minimal memiliki dua opsi.', 400);
     if (!opsi.every((o) => ['A', 'B', 'C', 'D', 'E'].includes(o.label))) throw new AppError('Label opsi harus A–E.', 400);
     if (new Set(opsi.map((o) => o.label)).size !== opsi.length) throw new AppError('Label opsi tidak boleh ganda.', 400);
@@ -516,13 +535,19 @@ export async function eksporEsai(c: C, ujianId: string): Promise<string> {
   // Tidak ada nama atau username: hanya ID pengerjaan dan ID soal.
   const baris = [
     ['pengerjaan_id', 'soal_id', 'skor_maks', 'rubrik', 'jawaban'].map(csvCell).join(','),
-    ...rows.map((r) => [r.pengerjaan_id, r.soal_id, 100, r.rubrik, r.nilai].map(csvCell).join(',')),
+    ...rows.map((r) => [r.pengerjaan_id, r.soal_id, 100, teksPolos(r.rubrik ?? ''), r.nilai].map(csvCell).join(',')),
   ];
   return baris.join('\n');
 }
 
-export async function imporEsai(c: C, ujianId: string, csv: string, namaFile: string, pelakuId: string) {
-  const rows = parseCsv(csv);
+export async function imporEsai(
+  c: C,
+  ujianId: string,
+  rows: string[][],
+  namaFile: string,
+  pelakuId: string,
+  hashBerkas: string,
+) {
   if (rows.length < 2) throw new AppError('File kosong atau hanya berisi header.', 400);
   const header = rows[0].map((h) => h.toLowerCase());
   const iPeng = header.indexOf('pengerjaan_id');
@@ -561,7 +586,7 @@ export async function imporEsai(c: C, ujianId: string, csv: string, namaFile: st
     await c.query(
       `INSERT INTO impor_nilai (nama_file, hash_file, diimpor_oleh, jumlah_baris, jumlah_galat)
        VALUES ($1, $2, $3, $4, 0) RETURNING id`,
-      [namaFile.slice(0, 200), createHash('sha256').update(csv).digest('hex'), pelakuId, data.length],
+      [namaFile.slice(0, 200), hashBerkas, pelakuId, data.length],
     )
   ).rows[0].id;
 

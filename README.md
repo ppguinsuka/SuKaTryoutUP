@@ -59,3 +59,15 @@ Deploy: Vercel. Database: Supabase (Transaction pooler, port 6543).
 
 - Kode ini belum dijalankan dan diuji end-to-end. Jalankan `npm run typecheck` dan `npm run build` sebelum deploy, lalu uji skenario Panitia, Pengawas, dan Peserta.
 - Jalankan uji beban sebelum hari H, dengan target 2000 peserta serentak.
+
+## Impor Excel dan editor WYSIWYG (v3)
+
+- **Semua impor memakai template Excel.** Unduh template dari panel Panitia (tombol *Unduh Template Excel*), isi, lalu unggah berkas `.xlsx` (atau `.csv`).
+  - Impor peserta: `template-impor-peserta.xlsx` (sheet *Peserta*, *Kode Bidang*, *Petunjuk*).
+  - Impor soal: `template-impor-soal.xlsx` (kolom: kode, bidang, tipe, isi, opsi_a–opsi_e, kunci, rubrik, status). Soal divalidasi semua sebelum disimpan. Gambar ditambahkan lewat editor setelah impor.
+  - Impor nilai esai: `template-impor-nilai-esai.xlsx`. Ambil `pengerjaan_id` dan `soal_id` dari ekspor esai.
+  - Satu baris salah membatalkan seluruh impor.
+- **Editor WYSIWYG** untuk isi soal, teks opsi, dan rubrik esai (toolbar: tebal, miring, garis bawah, judul, daftar, tautan, gambar, tabel, undo/redo, source HTML).
+- **Gambar disimpan sebagai base64** langsung di dalam konten. Gambar dikecilkan di browser (lebar maks. 1000 px, JPEG) agar ukurannya wajar.
+- Konten dibersihkan di server (`src/lib/sanitize.ts`, allowlist `sanitize-html`): script, event handler, dan tautan selain http(s)/mailto dibuang. Gambar hanya diterima dalam bentuk data URI base64.
+- Dependensi baru: `xlsx`, `sanitize-html`, `@types/sanitize-html`. Jalankan `npm install` setelah mengambil perubahan ini.

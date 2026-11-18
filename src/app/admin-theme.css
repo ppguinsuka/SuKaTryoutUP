@@ -273,3 +273,11 @@
 .login-page .login-card .form-error{margin-top:14px;}
 .login-page .login-footnote{font-size:.74rem;color:#94a3b8;text-align:center;margin-top:26px;}
 @media(max-width:960px){.login-page .login-form-panel {padding:38px 20px}.login-page .login-card h2{font-size:1.8rem}}
+
+/* Pratinjau dan toolbar ringkas untuk editor WYSIWYG di panel Panitia */
+.editor-preview { border-top: 1px solid var(--border); background: var(--surface-muted, #f8fafc); padding: 14px 18px; }
+.editor-preview > strong { display: block; margin-bottom: 8px; font-size: .9rem; }
+.wysiwyg-compact .editor-toolbar { flex-wrap: wrap; }
+.wysiwyg-compact .editor-canvas { min-height: 44px; }
+.wysiwyg-compact .field, .wysiwyg-compact { margin: 0; }
+.editor-preview .reading-content img { max-width: 100%; height: auto; }

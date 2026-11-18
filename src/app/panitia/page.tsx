@@ -4,7 +4,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, post } from '@/lib/client';
 import { AdminShell } from '@/components/admin-shell';
 import { PanitiaDashboard } from '@/components/panitia-dashboard';
+import { RichEditor } from '@/components/rich-editor';
+import { teksPolos } from '@/lib/konten';
 import '../admin-theme.css';
+
+/** Membaca berkas sebagai base64 (tanpa prefix data URL) agar bisa dikirim sebagai JSON. */
+function fileKeBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+    reader.onerror = () => reject(new Error('Gagal membaca berkas.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 type Tab = 'dashboard' | 'ujian' | 'soal' | 'peserta' | 'pengawas' | 'ruang' | 'nilai';
 type Bidang = { kode: string; nama: string };
@@ -154,10 +166,10 @@ function RuangTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
  * Peserta (termasuk impor CSV)
  * ------------------------------------------------------------------ */
 function PesertaTab({ rujukan, setError, setInfo }: Props) {
+  const [berkas, setBerkas] = useState<File | null>(null);
   const [bidang, setBidang] = useState('');
   const [daftar, setDaftar] = useState<{ id: string; username: string; nama: string; bidang: string; status: string }[]>([]);
   const [form, setForm] = useState({ id: '', username: '', nama: '', bidang: '237', password: '', status: 'ACTIVE' });
-  const [csv, setCsv] = useState('');
 
   const muat = useCallback(() => {
     baca<typeof daftar>(`aksi=peserta${bidang ? `&bidang=${bidang}` : ''}`).then(setDaftar).catch((e: Error) => setError(e.message));
@@ -175,12 +187,13 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
     } catch (e) { setError((e as Error).message); }
   }
 
-  async function imporCsv() {
+  async function imporBerkas() {
+    if (!berkas) return;
     setError(null);
     try {
-      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-peserta', csv });
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-peserta', berkas: await fileKeBase64(berkas), namaFile: berkas.name });
       setInfo(`${r.jumlah} peserta berhasil diimpor.`);
-      setCsv('');
+      setBerkas(null);
       muat();
     } catch (e) { setError((e as Error).message); }
   }
@@ -229,13 +242,15 @@ function PesertaTab({ rujukan, setError, setInfo }: Props) {
       </div>
 
       <div className="card">
-        <h3>Impor Peserta (CSV)</h3>
-        <div className="info" style={{ marginBottom: 8, fontSize: 13 }}>
-          Format per baris: <code>username,nama,bidang,password</code>. Bidang berupa kode 3 digit, misalnya 237. Satu baris salah membatalkan seluruh impor.
+        <h3>Impor Peserta (Excel)</h3>
+        <div className="notice neutral" style={{ fontSize: 13 }}>
+          Unduh template terlebih dahulu. Kolom: <code>username, nama, bidang, password</code>. Bidang berupa kode 3 digit, misalnya 237. Satu baris salah membatalkan seluruh impor.
         </div>
-        <input type="file" accept=".csv,text/csv" onChange={async (e) => setCsv(await e.target.files![0].text())} />
-        <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} style={{ width: '100%', marginTop: 8, fontFamily: 'monospace' }} />
-        <div style={{ marginTop: 8 }}><button className="btn" disabled={!csv.trim()} onClick={imporCsv}>Impor</button></div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <a className="btn outline" href="/api/panitia?aksi=template-peserta">Unduh Template Excel</a>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setBerkas(e.target.files?.[0] ?? null)} />
+          <button className="btn" disabled={!berkas} onClick={imporBerkas}>Impor</button>
+        </div>
       </div>
     </>
   );
@@ -290,6 +305,7 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
   const [daftar, setDaftar] = useState<{ id: string; kode: string | null; bidang: string; tipe: string; isi: string; status: string; jumlah_opsi: number }[]>([]);
   const [form, setForm] = useState({ id: '', kode: '', bidang: '237', tipe: 'PILIHAN_GANDA', isi: '', rubrik: '', status: 'PUBLISHED' });
   const [opsi, setOpsi] = useState<OpsiForm[]>(KOSONG_OPSI());
+  const [berkasSoal, setBerkasSoal] = useState<File | null>(null);
 
   const muat = useCallback(() => {
     const q = new URLSearchParams({ aksi: 'soal' });
@@ -299,6 +315,17 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
   }, [bidang, tipe, setError]);
 
   useEffect(() => { muat(); }, [muat]);
+
+  async function imporSoalBerkas() {
+    if (!berkasSoal) return;
+    setError(null);
+    try {
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-soal', berkas: await fileKeBase64(berkasSoal), namaFile: berkasSoal.name });
+      setInfo(`${r.jumlah} soal berhasil diimpor.`);
+      setBerkasSoal(null);
+      muat();
+    } catch (e) { setError((e as Error).message); }
+  }
 
   async function ubah(id: string) {
     const d = await baca<{ kode: string | null; bidang: string; tipe: string; isi: string; rubrik: string | null; status: string; opsi: OpsiForm[] }>(`aksi=soal-detail&id=${id}`);
@@ -323,6 +350,18 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
   return (
     <>
       <div className="card">
+        <h3>Impor Soal (Excel)</h3>
+        <div className="notice neutral" style={{ fontSize: 13 }}>
+          Unduh template, isi sheet <b>Soal</b>, lalu unggah. Tipe: <code>PILIHAN_GANDA</code> atau <code>ESAI</code>. Gambar ditambahkan setelah impor lewat editor. Satu baris salah membatalkan seluruh impor.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <a className="btn outline" href="/api/panitia?aksi=template-soal">Unduh Template Excel</a>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setBerkasSoal(e.target.files?.[0] ?? null)} />
+          <button className="btn" disabled={!berkasSoal} onClick={imporSoalBerkas}>Impor</button>
+        </div>
+      </div>
+
+      <div className="card">
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
           <select value={bidang} onChange={(e) => setBidang(e.target.value)} style={{ padding: 6 }}>
             <option value="">Semua Bidang Studi</option>
@@ -340,7 +379,7 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
             {daftar.map((s) => (
               <tr key={s.id}>
                 <td>{s.kode ?? '—'}</td><td>{s.bidang}</td><td>{s.tipe === 'ESAI' ? 'Esai' : 'Pilihan ganda'}</td>
-                <td style={{ maxWidth: 360 }}>{s.isi.slice(0, 90)}{s.isi.length > 90 ? '…' : ''}</td>
+                <td style={{ maxWidth: 360 }}>{teksPolos(s.isi).slice(0, 90)}{teksPolos(s.isi).length > 90 ? '…' : ''}</td>
                 <td>{s.status}</td>
                 <td><button className="btn outline" onClick={() => ubah(s.id)}>Ubah</button></td>
               </tr>
@@ -367,7 +406,9 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
             <option value="ARSIP">Arsip</option>
           </select>
         </div>
-        <textarea placeholder="Isi soal" value={form.isi} onChange={(e) => setForm({ ...form, isi: e.target.value })} rows={4} style={{ width: '100%', marginTop: 8 }} />
+        <div style={{ marginTop: 8 }}>
+          <RichEditor label="Isi soal" value={form.isi} onChange={(v) => setForm({ ...form, isi: v })} placeholder="Tulis isi soal. Gambar dapat disisipkan lewat toolbar." />
+        </div>
 
         {form.tipe === 'PILIHAN_GANDA' ? (
           <div style={{ marginTop: 8 }}>
@@ -375,7 +416,9 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
             {opsi.map((o, i) => (
               <div key={o.label} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ width: 20 }}>{o.label}</span>
-                <input style={{ flex: 1 }} value={o.teks} onChange={(e) => setOpsi(opsi.map((x, j) => (j === i ? { ...x, teks: e.target.value } : x)))} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <RichEditor label={`Opsi ${o.label}`} compact value={o.teks} onChange={(v) => setOpsi(opsi.map((x, j) => (j === i ? { ...x, teks: v } : x)))} />
+                </div>
                 <label style={{ fontSize: 13 }}>
                   <input type="radio" name="benar" checked={o.benar} onChange={() => setOpsi(opsi.map((x, j) => ({ ...x, benar: j === i })))} /> benar
                 </label>
@@ -384,7 +427,7 @@ function SoalTab({ rujukan, setError, setInfo }: Props) {
           </div>
         ) : (
           <div style={{ marginTop: 8 }}>
-            <textarea placeholder="Rubrik penilaian (dipakai AI untuk memberi nilai 0–100)" value={form.rubrik} onChange={(e) => setForm({ ...form, rubrik: e.target.value })} rows={5} style={{ width: '100%' }} />
+            <RichEditor label="Rubrik penilaian (dipakai AI untuk memberi nilai 0–100)" value={form.rubrik} onChange={(v) => setForm({ ...form, rubrik: v })} placeholder="Tulis kriteria penilaian, skor per kriteria, dan contoh jawaban ideal." />
           </div>
         )}
 
@@ -582,7 +625,7 @@ function UjianTab({ rujukan, onRefresh, setError, setInfo }: Props & { onRefresh
           {bankSoal.map((s) => (
             <label key={s.id} style={{ display: 'flex', gap: 8, fontSize: 14, marginBottom: 4 }}>
               <input type="checkbox" checked={soalIds.includes(s.id)} onChange={(e) => setSoalIds(e.target.checked ? [...soalIds, s.id] : soalIds.filter((x) => x !== s.id))} />
-              <span>[{s.tipe === 'ESAI' ? 'Esai' : 'PG'}] {s.kode ? `${s.kode} – ` : ''}{s.isi.slice(0, 100)}</span>
+              <span>[{s.tipe === 'ESAI' ? 'Esai' : 'PG'}] {s.kode ? `${s.kode} – ` : ''}{teksPolos(s.isi).slice(0, 100)}</span>
             </label>
           ))}
           {bankSoal.length === 0 && <div style={{ fontSize: 13 }}>Belum ada soal PUBLISHED untuk Bidang Studi ini.</div>}
@@ -700,8 +743,7 @@ function NilaiTab({ setError, setInfo }: Omit<Props, 'rujukan'> & { rujukan: Ruj
   async function imporNilai(file: File) {
     setError(null);
     try {
-      const csv = await file.text();
-      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-esai', ujianId, csv, namaFile: file.name });
+      const r = await aksi<{ jumlah: number }>({ aksi: 'impor-esai', ujianId, berkas: await fileKeBase64(file), namaFile: file.name });
       setInfo(`${r.jumlah} nilai esai berhasil diimpor.`);
       muatHasil();
     } catch (e) { setError((e as Error).message); }
@@ -732,13 +774,14 @@ function NilaiTab({ setError, setInfo }: Omit<Props, 'rujukan'> & { rujukan: Ruj
           <div className="card">
             <h3>Penilaian Esai</h3>
             <ol style={{ fontSize: 14, lineHeight: 1.7 }}>
-              <li>Unduh esai (berisi ID pengerjaan dan rubrik, tanpa nama peserta).</li>
-              <li>Koreksi dengan AI menggunakan rubrik, lalu isi kolom <code>skor</code> (0–100) dan <code>umpan_balik</code>.</li>
-              <li>Unggah kembali file hasil koreksi.</li>
+              <li>Unduh esai (CSV berisi ID pengerjaan dan rubrik, tanpa nama peserta).</li>
+              <li>Koreksi dengan AI menggunakan rubrik, lalu isi kolom <code>skor</code> (0–100) dan <code>umpan_balik</code> di template Excel.</li>
+              <li>Unggah kembali hasil koreksi dalam format Excel (.xlsx) atau CSV.</li>
             </ol>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <a className="btn outline" href={`/api/panitia?aksi=ekspor-esai&ujianId=${ujianId}`}>Unduh Esai (CSV)</a>
-              <input type="file" accept=".csv,text/csv" onChange={(e) => e.target.files?.[0] && imporNilai(e.target.files[0])} />
+              <a className="btn outline" href="/api/panitia?aksi=template-esai">Unduh Template Excel</a>
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && imporNilai(e.target.files[0])} />
             </div>
           </div>
 

@@ -233,3 +233,14 @@ table.tabel th { background: #eef3fa; }
   padding: 6px 10px;
 }
 .sesi-aksi .info-box { flex-basis: 100%; }
+
+/* Konten soal (HTML dari editor WYSIWYG, sudah dibersihkan di server) */
+.soal-html p { margin: 0 0 8px; }
+.soal-html img { max-width: 100%; height: auto; display: block; margin: 8px 0; border-radius: 6px; }
+.soal-html figure { margin: 8px 0; }
+.soal-html table { border-collapse: collapse; margin: 8px 0; max-width: 100%; }
+.soal-html th, .soal-html td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+.soal-html th { background: #f1f5f9; }
+.soal-html h2 { font-size: 1.15rem; margin: 10px 0 6px; }
+.soal-html h3 { font-size: 1.05rem; margin: 10px 0 6px; }
+.soal-html ul, .soal-html ol { margin: 4px 0 8px 22px; }

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmtDetik, post } from '@/lib/client';
+import { kontenKeHtml } from '@/lib/konten';
 
 type Tipe = 'PILIHAN_GANDA' | 'ESAI';
 type Bagian = { tipe: Tipe; status: string; jumlahTersimpan: number; sisaDetik: number };
@@ -246,7 +247,7 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
                   {belumTersimpan ? 'Belum tersimpan' : 'Tersimpan'}
                 </span>
               </div>
-              <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, marginBottom: 14 }}>{soal.isi}</div>
+              <div className="soal-html" style={{ lineHeight: 1.6, marginBottom: 14 }} dangerouslySetInnerHTML={{ __html: kontenKeHtml(soal.isi) }} />
 
               {soal.tipe === 'PILIHAN_GANDA' && soal.opsi && (
                 <div>
@@ -260,7 +261,7 @@ export default function KerjakanPage({ params }: { params: Promise<{ id: string 
                       aria-checked={draft === o.label}
                     >
                       <span className="huruf">{o.label}</span>
-                      <span>{o.teks}</span>
+                      <div className="soal-html" dangerouslySetInnerHTML={{ __html: kontenKeHtml(o.teks) }} />
                     </div>
                   ))}
                 </div>
